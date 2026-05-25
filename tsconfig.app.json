@@ -23,15 +23,16 @@
 
     /* Path aliases — must mirror vite.config.ts resolve.alias */
     "paths": {
-      "@mobile/coach/*": ["../thecc-plus-app/src/components/coach/*"],
-      "@mobile/theme/*": ["../thecc-plus-app/src/theme/*"]
+      "@mobile/coach/*": ["./src/mobile-shared/coach/*"],
+      "@mobile/theme/*": ["./src/mobile-shared/theme/*"],
+      "expo-image": ["./src/shims/expo-image.tsx"],
+      "expo-font": ["./src/shims/expo-font.ts"],
+      "@expo/vector-icons": ["./src/shims/expo-vector-icons.tsx"]
     },
     "baseUrl": ".",
     "ignoreDeprecations": "6.0"
   },
   "include": [
-    "src",
-    "../thecc-plus-app/src/components/coach/CoachProfileView.tsx",
-    "../thecc-plus-app/src/theme/tokens.ts"
+    "src"
   ]
 }
