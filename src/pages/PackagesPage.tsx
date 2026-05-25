@@ -1,0 +1,572 @@
+/**
+ * PackagesPage — Issue #15
+ *
+ * PT can see, add, edit, delete, and reorder their pricing packages (pt_offerings).
+ *
+ * Data: read/write to `pt_offerings` via Supabase JS client (RLS scoped to coach_id).
+ * Reorder: up/down arrow buttons update display_order on each affected row.
+ * Max 10 packages per PT in v1.
+ */
+
+import React, { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
+import { supabase } from '../lib/supabase';
+import { PortalLayout } from '../components/PortalLayout';
+
+// ── Types ──────────────────────────────────────────────────────────────────
+
+interface PtOffering {
+  id: string;
+  label: string;
+  description: string | null;
+  price_nzd: number;
+  duration_label: string | null;
+  cta_label: string | null;
+  cta_url: string | null;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+interface OfferingFormState {
+  label: string;
+  description: string;
+  price_nzd: string;
+  duration_label: string;
+  cta_label: string;
+  cta_url: string;
+}
+
+const MAX_PACKAGES = 10;
+
+const EMPTY_FORM: OfferingFormState = {
+  label: '',
+  description: '',
+  price_nzd: '',
+  duration_label: '',
+  cta_label: 'Book now',
+  cta_url: '',
+};
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+
+function Toast({ message, type, onDismiss }: { message: string; type: 'success' | 'error'; onDismiss: () => void }) {
+  const { tenant } = useTenant();
+  const primary = tenant?.primary_color ?? '#FFD600';
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 4000);
+    return () => clearTimeout(t);
+  }, [onDismiss]);
+  return (
+    <div
+      className="fixed top-4 right-4 z-50 rounded-xl px-4 py-3 text-sm font-medium shadow-lg flex items-center gap-2 max-w-xs"
+      style={type === 'success' ? { backgroundColor: primary, color: '#000000' } : { backgroundColor: '#ef4444', color: '#ffffff' }}
+    >
+      <span>{type === 'success' ? '✓' : '✕'}</span>
+      <span>{message}</span>
+    </div>
+  );
+}
+
+// ── Empty state ────────────────────────────────────────────────────────────
+
+function EmptyPackages({ onAdd, primary }: { onAdd: () => void; primary: string }) {
+  return (
+    <div className="text-center py-20">
+      <div
+        className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4"
+        style={{ backgroundColor: primary + '15' }}
+      >
+        📦
+      </div>
+      <h3 className="text-text font-semibold text-lg mb-2">No packages yet</h3>
+      <p className="text-text-muted text-sm mb-6 max-w-xs mx-auto">
+        List your coaching programmes and pricing so clients know what you offer.
+      </p>
+      <button
+        onClick={onAdd}
+        className="px-5 py-2.5 rounded-xl font-semibold text-sm"
+        style={{ backgroundColor: primary, color: '#000000' }}
+      >
+        Add your first package
+      </button>
+    </div>
+  );
+}
+
+// ── Package card ───────────────────────────────────────────────────────────
+
+function PackageCard({
+  offering,
+  primary,
+  isFirst,
+  isLast,
+  onEdit,
+  onDelete,
+  onMoveUp,
+  onMoveDown,
+}: {
+  offering: PtOffering;
+  primary: string;
+  isFirst: boolean;
+  isLast: boolean;
+  onEdit: (o: PtOffering) => void;
+  onDelete: (o: PtOffering) => void;
+  onMoveUp: (o: PtOffering) => void;
+  onMoveDown: (o: PtOffering) => void;
+}) {
+  return (
+    <div className="bg-surface border border-border rounded-2xl p-5 flex gap-3 items-start">
+      {/* Reorder buttons */}
+      <div className="flex flex-col gap-1 pt-1">
+        <button
+          onClick={() => onMoveUp(offering)}
+          disabled={isFirst}
+          className="w-6 h-6 flex items-center justify-center rounded-lg text-text-subtle hover:text-text hover:bg-surface-alt transition-colors disabled:opacity-20 disabled:cursor-not-allowed text-xs"
+          title="Move up"
+        >
+          ↑
+        </button>
+        <button
+          onClick={() => onMoveDown(offering)}
+          disabled={isLast}
+          className="w-6 h-6 flex items-center justify-center rounded-lg text-text-subtle hover:text-text hover:bg-surface-alt transition-colors disabled:opacity-20 disabled:cursor-not-allowed text-xs"
+          title="Move down"
+        >
+          ↓
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <h3 className="text-text font-semibold text-sm">{offering.label}</h3>
+          <span className="text-lg font-bold flex-shrink-0" style={{ color: primary }}>
+            ${offering.price_nzd.toFixed(2)}
+            <span className="text-text-subtle text-xs font-normal ml-0.5">NZD</span>
+          </span>
+        </div>
+        {offering.duration_label && (
+          <p className="text-text-subtle text-xs mb-1">{offering.duration_label}</p>
+        )}
+        {offering.description && (
+          <p className="text-text-muted text-xs leading-relaxed line-clamp-2">{offering.description}</p>
+        )}
+        {offering.cta_url && (
+          <a
+            href={offering.cta_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block mt-2 text-xs font-semibold underline"
+            style={{ color: primary }}
+          >
+            {offering.cta_label ?? 'Book now'} ↗
+          </a>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="flex flex-col gap-1 flex-shrink-0">
+        <button
+          onClick={() => onEdit(offering)}
+          className="text-text-muted hover:text-text text-xs px-2 py-1 rounded-lg hover:bg-surface-alt transition-colors"
+        >
+          Edit
+        </button>
+        <button
+          onClick={() => onDelete(offering)}
+          className="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded-lg hover:bg-surface-alt transition-colors"
+        >
+          Remove
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Package form modal ─────────────────────────────────────────────────────
+
+function PackageFormModal({
+  offering,
+  onClose,
+  onSave,
+  primary,
+}: {
+  offering: PtOffering | null;
+  onClose: () => void;
+  onSave: (form: OfferingFormState, offeringId: string | null) => Promise<void>;
+  primary: string;
+}) {
+  const [form, setForm] = useState<OfferingFormState>(
+    offering
+      ? {
+          label: offering.label,
+          description: offering.description ?? '',
+          price_nzd: String(offering.price_nzd),
+          duration_label: offering.duration_label ?? '',
+          cta_label: offering.cta_label ?? 'Book now',
+          cta_url: offering.cta_url ?? '',
+        }
+      : EMPTY_FORM,
+  );
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  function set<K extends keyof OfferingFormState>(key: K, value: string) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setErrors((prev) => { const n = { ...prev }; delete n[key]; return n; });
+  }
+
+  function validate(): boolean {
+    const e: Record<string, string> = {};
+    if (!form.label.trim()) e.label = 'Package name is required.';
+    else if (form.label.length > 60) e.label = 'Max 60 characters.';
+    if (form.description.length > 300) e.description = 'Max 300 characters.';
+    const price = parseFloat(form.price_nzd);
+    if (!form.price_nzd || isNaN(price) || price < 0) e.price_nzd = 'Enter a valid price (0 or more).';
+    if (form.duration_label.length > 40) e.duration_label = 'Max 40 characters.';
+    if (form.cta_label.length > 30) e.cta_label = 'Max 30 characters.';
+    if (form.cta_url && !/^https:\/\//i.test(form.cta_url)) {
+      e.cta_url = 'Link must start with https://';
+    }
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!validate()) return;
+    setSaving(true);
+    await onSave(form, offering?.id ?? null);
+    setSaving(false);
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="w-full sm:max-w-lg bg-surface rounded-t-3xl sm:rounded-2xl border border-border max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-surface z-10">
+          <h2 className="text-text font-bold text-base">{offering ? 'Edit package' : 'Add a package'}</h2>
+          <button onClick={onClose} className="text-text-muted hover:text-text text-xl leading-none">×</button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <ModalField label="Package name *" error={errors.label}>
+            <input
+              type="text"
+              value={form.label}
+              onChange={(e) => set('label', e.target.value)}
+              maxLength={70}
+              placeholder="e.g. 12-Week Transformation Programme"
+              className="w-full bg-canvas border border-border rounded-xl px-4 py-2.5 text-text text-sm focus:outline-none"
+            />
+          </ModalField>
+
+          <ModalField label="Description (optional)" error={errors.description}>
+            <textarea
+              value={form.description}
+              onChange={(e) => set('description', e.target.value)}
+              rows={3}
+              maxLength={320}
+              placeholder="What's included, who it's for…"
+              className="w-full bg-canvas border border-border rounded-xl px-4 py-2.5 text-text text-sm focus:outline-none resize-none"
+            />
+            <p className="text-text-subtle text-xs mt-0.5">{form.description.length}/300 chars</p>
+          </ModalField>
+
+          <ModalField label="Price (NZD) *" error={errors.price_nzd}>
+            <div className="flex items-center bg-canvas border border-border rounded-xl overflow-hidden">
+              <span className="px-3 text-text-subtle text-sm border-r border-border py-2.5">$</span>
+              <input
+                type="number"
+                value={form.price_nzd}
+                onChange={(e) => set('price_nzd', e.target.value)}
+                placeholder="199.00"
+                min="0"
+                step="0.01"
+                className="flex-1 bg-transparent px-3 py-2.5 text-text text-sm focus:outline-none"
+              />
+              <span className="px-3 text-text-subtle text-xs">NZD</span>
+            </div>
+          </ModalField>
+
+          <ModalField label="Duration / sessions label (optional)" error={errors.duration_label}>
+            <input
+              type="text"
+              value={form.duration_label}
+              onChange={(e) => set('duration_label', e.target.value)}
+              maxLength={45}
+              placeholder="e.g. 12 weeks · 3 sessions/week"
+              className="w-full bg-canvas border border-border rounded-xl px-4 py-2.5 text-text text-sm focus:outline-none"
+            />
+          </ModalField>
+
+          <ModalField label="Button label (optional)" error={errors.cta_label}>
+            <input
+              type="text"
+              value={form.cta_label}
+              onChange={(e) => set('cta_label', e.target.value)}
+              maxLength={35}
+              placeholder="Book now"
+              className="w-full bg-canvas border border-border rounded-xl px-4 py-2.5 text-text text-sm focus:outline-none"
+            />
+          </ModalField>
+
+          <ModalField label="Link URL (optional — must be https://)" error={errors.cta_url}>
+            <input
+              type="url"
+              value={form.cta_url}
+              onChange={(e) => set('cta_url', e.target.value)}
+              placeholder="https://your-booking-link.com"
+              className="w-full bg-canvas border border-border rounded-xl px-4 py-2.5 text-text text-sm focus:outline-none"
+            />
+          </ModalField>
+
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl text-sm font-medium text-text-muted border border-border hover:text-text transition-colors">Cancel</button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold disabled:opacity-50"
+              style={{ backgroundColor: primary, color: '#000000' }}
+            >
+              {saving ? 'Saving…' : offering ? 'Save changes' : 'Add package'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Delete confirm ─────────────────────────────────────────────────────────
+
+function DeleteModal({ offering, onConfirm, onCancel }: { offering: PtOffering; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-surface rounded-2xl border border-border p-6">
+        <h3 className="text-text font-bold text-base mb-2">Remove this package?</h3>
+        <p className="text-text-muted text-sm mb-6">
+          <strong className="text-text">{offering.label}</strong> will no longer show on your profile.
+        </p>
+        <div className="flex gap-3">
+          <button onClick={onCancel} className="flex-1 py-2.5 rounded-xl text-sm font-medium text-text-muted border border-border hover:text-text transition-colors">Keep it</button>
+          <button onClick={onConfirm} className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-red-500 text-white hover:bg-red-400 transition-colors">Remove</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── ModalField ─────────────────────────────────────────────────────────────
+
+function ModalField({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-text-muted text-xs font-medium mb-1.5 uppercase tracking-wide">{label}</label>
+      {children}
+      {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
+    </div>
+  );
+}
+
+// ── Main page ──────────────────────────────────────────────────────────────
+
+export default function PackagesPage() {
+  const { coachRow } = useAuth();
+  const { tenant } = useTenant();
+  const primary = tenant?.primary_color ?? '#FFD600';
+
+  const [offerings, setOfferings] = useState<PtOffering[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [editingOffering, setEditingOffering] = useState<PtOffering | null>(null);
+  const [deletingOffering, setDeletingOffering] = useState<PtOffering | null>(null);
+  const [reordering, setReordering] = useState(false);
+
+  const fetchOfferings = useCallback(async () => {
+    if (!coachRow) return;
+    const { data, error } = await supabase
+      .from('pt_offerings')
+      .select('*')
+      .eq('coach_id', coachRow.id)
+      .eq('is_active', true)
+      .order('display_order', { ascending: true })
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('[PackagesPage] fetch:', error);
+      setToast({ message: 'Failed to load packages.', type: 'error' });
+    } else {
+      setOfferings((data ?? []) as PtOffering[]);
+    }
+    setLoading(false);
+  }, [coachRow?.id]);
+
+  useEffect(() => { fetchOfferings(); }, [fetchOfferings]);
+
+  async function handleSaveOffering(form: OfferingFormState, offeringId: string | null) {
+    if (!coachRow || !tenant) return;
+
+    const payload = {
+      coach_id: coachRow.id,
+      api_client_id: tenant.api_client_id,
+      label: form.label.trim(),
+      description: form.description.trim() || null,
+      price_nzd: parseFloat(form.price_nzd),
+      duration_label: form.duration_label.trim() || null,
+      cta_label: form.cta_label.trim() || null,
+      cta_url: form.cta_url.trim() || null,
+    };
+
+    if (offeringId) {
+      const { error } = await supabase
+        .from('pt_offerings')
+        .update({ ...payload, updated_at: new Date().toISOString() })
+        .eq('id', offeringId)
+        .eq('coach_id', coachRow.id);
+      if (error) { setToast({ message: 'Failed to save changes.', type: 'error' }); return; }
+      setToast({ message: 'Package updated.', type: 'success' });
+    } else {
+      if (offerings.length >= MAX_PACKAGES) {
+        setToast({ message: `You've reached the ${MAX_PACKAGES}-package limit.`, type: 'error' });
+        return;
+      }
+      const nextOrder = offerings.length > 0 ? Math.max(...offerings.map((o) => o.display_order)) + 1 : 0;
+      const { error } = await supabase.from('pt_offerings').insert({ ...payload, display_order: nextOrder });
+      if (error) { setToast({ message: 'Failed to add package.', type: 'error' }); return; }
+      setToast({ message: 'Package added.', type: 'success' });
+    }
+
+    setShowForm(false);
+    setEditingOffering(null);
+    fetchOfferings();
+  }
+
+  async function handleDelete() {
+    if (!deletingOffering || !coachRow) return;
+    const { error } = await supabase
+      .from('pt_offerings')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', deletingOffering.id)
+      .eq('coach_id', coachRow.id);
+
+    if (error) {
+      setToast({ message: 'Failed to remove package.', type: 'error' });
+    } else {
+      setToast({ message: 'Package removed.', type: 'success' });
+      setOfferings((prev) => prev.filter((o) => o.id !== deletingOffering.id));
+    }
+    setDeletingOffering(null);
+  }
+
+  async function moveOffering(offering: PtOffering, direction: 'up' | 'down') {
+    const idx = offerings.findIndex((o) => o.id === offering.id);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= offerings.length) return;
+
+    const updated = [...offerings];
+    const tempOrder = updated[idx].display_order;
+    updated[idx] = { ...updated[idx], display_order: updated[swapIdx].display_order };
+    updated[swapIdx] = { ...updated[swapIdx], display_order: tempOrder };
+    updated.sort((a, b) => a.display_order - b.display_order);
+
+    setOfferings(updated);
+    setReordering(true);
+
+    // Persist the two swapped rows
+    await Promise.all([
+      supabase.from('pt_offerings').update({ display_order: updated[swapIdx < idx ? idx : swapIdx].display_order }).eq('id', updated[swapIdx < idx ? idx : swapIdx].id),
+      supabase.from('pt_offerings').update({ display_order: updated[swapIdx < idx ? swapIdx : idx].display_order }).eq('id', updated[swapIdx < idx ? swapIdx : idx].id),
+    ]);
+
+    setReordering(false);
+  }
+
+  return (
+    <PortalLayout>
+      {toast && <Toast message={toast.message} type={toast.type} onDismiss={() => setToast(null)} />}
+
+      {(showForm || editingOffering) && (
+        <PackageFormModal
+          offering={editingOffering}
+          onClose={() => { setShowForm(false); setEditingOffering(null); }}
+          onSave={handleSaveOffering}
+          primary={primary}
+        />
+      )}
+
+      {deletingOffering && (
+        <DeleteModal
+          offering={deletingOffering}
+          onConfirm={handleDelete}
+          onCancel={() => setDeletingOffering(null)}
+        />
+      )}
+
+      <div className="max-w-3xl mx-auto px-4 py-8">
+        {/* Heading */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-text text-2xl font-bold">My Packages</h1>
+            <p className="text-text-muted text-sm mt-0.5">
+              {offerings.length > 0
+                ? `${offerings.length} package${offerings.length !== 1 ? 's' : ''} · use the arrows to reorder`
+                : 'No packages yet'}
+            </p>
+          </div>
+          {offerings.length > 0 && offerings.length < MAX_PACKAGES && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="px-4 py-2 rounded-xl font-semibold text-sm"
+              style={{ backgroundColor: primary, color: '#000000' }}
+            >
+              + Add package
+            </button>
+          )}
+        </div>
+
+        {/* Reordering indicator */}
+        {reordering && (
+          <div className="mb-3 flex items-center gap-2 text-text-muted text-xs">
+            <div className="w-3 h-3 border border-border border-t-primary rounded-full animate-spin" />
+            Saving order…
+          </div>
+        )}
+
+        {/* Content */}
+        {loading ? (
+          <div className="flex justify-center py-20">
+            <div className="w-6 h-6 border-2 border-border border-t-primary rounded-full animate-spin" />
+          </div>
+        ) : offerings.length === 0 ? (
+          <EmptyPackages onAdd={() => setShowForm(true)} primary={primary} />
+        ) : (
+          <div className="space-y-3">
+            {offerings.map((o, idx) => (
+              <PackageCard
+                key={o.id}
+                offering={o}
+                primary={primary}
+                isFirst={idx === 0}
+                isLast={idx === offerings.length - 1}
+                onEdit={(offering) => setEditingOffering(offering)}
+                onDelete={(offering) => setDeletingOffering(offering)}
+                onMoveUp={(offering) => moveOffering(offering, 'up')}
+                onMoveDown={(offering) => moveOffering(offering, 'down')}
+              />
+            ))}
+            {offerings.length >= MAX_PACKAGES && (
+              <div className="bg-surface border border-border rounded-2xl p-4 text-center">
+                <p className="text-text-muted text-sm">
+                  You've reached the {MAX_PACKAGES}-package limit.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </PortalLayout>
+  );
+}

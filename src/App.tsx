@@ -20,6 +20,9 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import PortalNotFoundPage from './pages/PortalNotFoundPage';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
+import ProfilePage from './pages/ProfilePage';
+import DealsPage from './pages/DealsPage';
+import PackagesPage from './pages/PackagesPage';
 import NotSetupPage from './pages/NotSetupPage';
 import InviteExpiredPage from './pages/InviteExpiredPage';
 
@@ -72,15 +75,33 @@ function PortalRoutes() {
           : <DashboardPage />
       } />
 
-      {/* Placeholder routes — scaffolded in subsequent issues */}
+      {/* PT self-service pages — Issues #12, #14, #15 */}
       <Route path="/profile" element={
-        !session ? <Navigate to="/login" replace /> : <ComingSoon title="Profile" />
+        !session
+          ? <Navigate to="/login" replace />
+          : coachStatus === 'loading'
+          ? <LoadingScreen />
+          : coachStatus === 'not_setup'
+          ? <NotSetupPage />
+          : <ProfilePage />
       } />
       <Route path="/deals" element={
-        !session ? <Navigate to="/login" replace /> : <ComingSoon title="Deals" />
+        !session
+          ? <Navigate to="/login" replace />
+          : coachStatus === 'loading'
+          ? <LoadingScreen />
+          : coachStatus === 'not_setup'
+          ? <NotSetupPage />
+          : <DealsPage />
       } />
       <Route path="/packages" element={
-        !session ? <Navigate to="/login" replace /> : <ComingSoon title="Packages" />
+        !session
+          ? <Navigate to="/login" replace />
+          : coachStatus === 'loading'
+          ? <LoadingScreen />
+          : coachStatus === 'not_setup'
+          ? <NotSetupPage />
+          : <PackagesPage />
       } />
 
       {/* Default redirect */}
@@ -89,27 +110,6 @@ function PortalRoutes() {
       } />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
-  );
-}
-
-// ── Stub placeholder for unbuilt pages ────────────────────────────────────
-
-function ComingSoon({ title }: { title: string }) {
-  const { tenant } = useTenant();
-  return (
-    <div className="min-h-screen bg-canvas flex items-center justify-center">
-      <div className="text-center">
-        <p className="text-text-muted text-sm mb-2">{title}</p>
-        <p className="text-text-subtle text-xs">Coming in next build</p>
-        <a
-          href="/dashboard"
-          className="block mt-6 text-sm underline"
-          style={{ color: tenant?.primary_color ?? '#FFD600' }}
-        >
-          Back to dashboard
-        </a>
-      </div>
-    </div>
   );
 }
 

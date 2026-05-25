@@ -9,33 +9,17 @@
 
 import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
+import { PortalLayout } from '../components/PortalLayout';
 
 export default function DashboardPage() {
-  const { coachRow, signOut } = useAuth();
+  const { coachRow } = useAuth();
   const { tenant } = useTenant();
 
   const primaryColor = tenant?.primary_color ?? '#FFD600';
 
   return (
-    <div className="min-h-screen bg-canvas">
-      {/* Header */}
-      <header className="border-b border-border px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          {tenant?.logo_url ? (
-            <img src={tenant.logo_url} alt={tenant.app_name} className="h-8 object-contain" />
-          ) : (
-            <span className="text-text font-bold text-lg">{tenant?.app_name ?? 'Coach Portal'}</span>
-          )}
-        </div>
-        <button
-          onClick={signOut}
-          className="text-text-muted text-sm hover:text-text transition-colors"
-        >
-          Sign out
-        </button>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-6 py-10">
+    <PortalLayout>
+      <div className="max-w-3xl mx-auto px-6 py-10">
         {/* Welcome */}
         <div className="mb-10">
           <div className="flex items-center gap-4">
@@ -84,15 +68,8 @@ export default function DashboardPage() {
             primaryColor={primaryColor}
           />
         </div>
-
-        {/* Build status note — remove when all pages are built */}
-        <div className="mt-10 bg-surface border border-border rounded-xl p-4 text-center">
-          <p className="text-text-muted text-sm">
-            Portal scaffold is live. Full features (profile editing, deal management, live preview) coming in the next build.
-          </p>
-        </div>
-      </main>
-    </div>
+      </div>
+    </PortalLayout>
   );
 }
 
