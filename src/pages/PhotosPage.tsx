@@ -35,7 +35,7 @@ import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
 import { PortalLayout } from '../components/PortalLayout';
 import { GalleryPhotoCropModal } from '../components/GalleryPhotoCropModal';
-import { PreviewPanel, type PreviewCoachData } from '../components/preview/CoachProfilePreview';
+import { GalleryOnlyPreview } from '../components/preview/GalleryOnlyPreview';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -561,21 +561,10 @@ export default function PhotosPage() {
     [photos],
   );
 
-  // ── Preview data (derived from existing state — no new Supabase queries) ─
+  // ── Preview data — gallery-only (the /photos editor is photos-only,
+  //    so the preview pane matches that scope; no profile fields rendered) ──
 
-  const previewData: PreviewCoachData = {
-    name: (coachRow as any)?.name ?? 'Your Name',
-    bio: (coachRow as any)?.bio ?? null,
-    email: (coachRow as any)?.email ?? null,
-    photo_url: (coachRow as any)?.photo_url ?? null,
-    specialties: (coachRow as any)?.specialties ?? null,
-    instagram: (coachRow as any)?.instagram ?? null,
-    tiktok: (coachRow as any)?.tiktok ?? null,
-    is_personal_trainer: (coachRow as any)?.is_personal_trainer ?? false,
-    is_nutritionist: (coachRow as any)?.is_nutritionist ?? false,
-    gallery_photos: photos.map((p) => ({ id: p.id, public_url: p.public_url })),
-    packages: [],
-  };
+  const previewPhotos = photos.map((p) => ({ id: p.id, public_url: p.public_url }));
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -835,7 +824,7 @@ export default function PhotosPage() {
           </div>
 
           {/* Right column: live preview panel */}
-          <PreviewPanel formData={previewData} />
+          <GalleryOnlyPreview photos={previewPhotos} />
         </div>
       </div>
 
