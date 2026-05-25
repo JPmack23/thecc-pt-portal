@@ -13,6 +13,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
 import { PortalLayout } from '../components/PortalLayout';
+import {
+  PreviewPanel,
+  buildPreviewDataFromCoachRow,
+  type PreviewPackage,
+} from '../components/preview/CoachProfilePreview';
 
 // ── Carousel conflict confirmation modal ───────────────────────────────────────
 // Shown when Tyler tries to feature a package for a PT who already has one featured.
@@ -836,7 +841,11 @@ export default function PackagesPage() {
         />
       )}
 
-      <div className="max-w-3xl mx-auto px-4 py-8">
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        {/* Split-panel layout: editor on the left, live mobile preview on the right
+            (matches /profile and /photos for consistent visual scale + chrome) */}
+        <div className="flex gap-8 items-start">
+          <div className="flex-1 min-w-0">
         {/* Heading */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -909,6 +918,29 @@ export default function PackagesPage() {
             )}
           </div>
         )}
+          </div>
+
+          {/* Right column: live mobile preview — same PreviewPanel as /profile.
+              Only the packages section reflects live edits; everything else
+              shows the saved coachRow data (read-only context). */}
+          <PreviewPanel
+            formData={buildPreviewDataFromCoachRow(coachRow, {
+              packages: offerings.map(
+                (o): PreviewPackage => ({
+                  id: o.id,
+                  title: o.label,
+                  price: o.price_nzd,
+                  duration: o.duration_label,
+                  promo_label: o.promo_label,
+                  promo_active: o.promo_active,
+                  promo_starts_at: o.promo_starts_at,
+                  promo_ends_at: o.promo_ends_at,
+                  featured: o.featured_on_carousel,
+                }),
+              ),
+            })}
+          />
+        </div>
       </div>
     </PortalLayout>
   );

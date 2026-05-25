@@ -61,7 +61,7 @@ import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
 import { PortalLayout } from '../components/PortalLayout';
 import { GalleryPhotoCropModal } from '../components/GalleryPhotoCropModal';
-import { GalleryOnlyPreview } from '../components/preview/GalleryOnlyPreview';
+import { PreviewPanel, buildPreviewDataFromCoachRow } from '../components/preview/CoachProfilePreview';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -699,10 +699,13 @@ export default function PhotosPage() {
     [photos, uploading, showToast, loadPhotos],
   );
 
-  // ── Preview data — gallery-only (the /photos editor is photos-only,
-  //    so the preview pane matches that scope; no profile fields rendered) ──
+  // ── Preview data — full profile chrome with live gallery photos.
+  // Same PreviewPanel as /profile; only the gallery section reflects live
+  // edits on this page. Everything else reads from the saved coachRow.
 
-  const previewPhotos = photos.map((p) => ({ id: p.id, public_url: p.public_url }));
+  const previewData = buildPreviewDataFromCoachRow(coachRow, {
+    gallery_photos: photos.map((p) => ({ id: p.id, public_url: p.public_url })),
+  });
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -934,7 +937,7 @@ export default function PhotosPage() {
           </div>
 
           {/* Right column: live preview panel */}
-          <GalleryOnlyPreview photos={previewPhotos} />
+          <PreviewPanel formData={previewData} />
         </div>
       </div>
 

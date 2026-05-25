@@ -104,6 +104,58 @@ interface CoachProfilePreviewProps {
   formData: PreviewCoachData;
 }
 
+// ── Helper: build PreviewCoachData from saved CoachRow + live overrides ──
+//
+// Used by /photos and /packages so their preview pane renders the SAME full
+// profile chrome as /profile, but with their own live state (photos /
+// offerings) replacing the corresponding saved fields.
+//
+// `coachRow` shape comes from AuthContext.CoachRow — we accept `any` here to
+// avoid a circular import, but at the call site the field names match.
+//
+// `overrides` is the live state from the calling page (photos[] or
+// offerings[]). It merges over the saved coachRow values.
+
+export function buildPreviewDataFromCoachRow(
+  coachRow: any,
+  overrides: Partial<PreviewCoachData> = {},
+): PreviewCoachData {
+  if (!coachRow) {
+    // No coach row yet — render a placeholder so the phone frame still shows
+    return {
+      name: 'Your Name',
+      bio: null,
+      email: null,
+      photo_url: null,
+      specialties: null,
+      instagram: null,
+      tiktok: null,
+      ...overrides,
+    };
+  }
+  return {
+    name: coachRow.name ?? 'Your Name',
+    bio: coachRow.bio ?? null,
+    email: coachRow.email ?? null,
+    photo_url: coachRow.photo_url ?? null,
+    specialties: coachRow.specialties ?? null,
+    instagram: coachRow.instagram ?? null,
+    tiktok: coachRow.tiktok ?? null,
+    is_personal_trainer: coachRow.is_personal_trainer ?? null,
+    is_nutritionist: coachRow.is_nutritionist ?? null,
+    regions: coachRow.regions ?? null,
+    online_remote: coachRow.online_remote ?? null,
+    qualifications: coachRow.qualifications ?? null,
+    achievements: coachRow.achievements ?? null,
+    members_deal_active: coachRow.members_deal_active ?? false,
+    members_deal: coachRow.members_deal ?? null,
+    coupon_code: coachRow.coupon_code ?? null,
+    gallery_photos: null,
+    packages: null,
+    ...overrides,
+  };
+}
+
 // ── Data adapter ───────────────────────────────────────────────────────────
 
 /**

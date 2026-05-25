@@ -142,6 +142,11 @@ export default function ProfilePage() {
   // Coach offerings — loaded for the preview panel (read-only here, edited on PackagesPage)
   const [coachOfferings, setCoachOfferings] = useState<PreviewPackage[]>([]);
 
+  // Coach gallery photos — loaded for the preview panel (read-only here, edited on PhotosPage)
+  // So /profile renders the FULL profile preview including gallery, matching what
+  // members actually see in the mobile app.
+  const [coachGalleryPhotos, setCoachGalleryPhotos] = useState<Array<{ id: string; public_url: string }>>([]);
+
   // Gallery photo count — for the "Next: add gallery photos" nudge
   const [galleryPhotoCount, setGalleryPhotoCount] = useState<number | null>(null);
 
@@ -272,8 +277,9 @@ export default function ProfilePage() {
     members_deal_active: form.members_deal_active,
     members_deal: form.members_deal_active && form.members_deal.trim() ? form.members_deal.trim() : null,
     coupon_code: form.members_deal_active && form.coupon_code.trim() ? form.coupon_code.trim() : null,
-    // Gallery photos managed on /photos page; pass empty array here so preview renders without them
-    gallery_photos: [],
+    // Gallery photos — fetched read-only for the preview so /profile shows
+    // the full mobile-app rendering. Editing happens on /photos.
+    gallery_photos: coachGalleryPhotos,
     packages: coachOfferings,
   };
 
@@ -588,7 +594,20 @@ export default function ProfilePage() {
       });
   }, [coachRow?.id]);
 
-  // ── Gallery photo count: for "Next: add gallery photos" nudge ─────────────
+  // ── Gallery photos: fetch for preview panel + count for "Next: add gallery" nudge ──
+
+  useEffect(() => {
+    if (!coachRow?.id) return;
+    supabase
+      .from('coach_photos')
+      .select('id, public_url')
+      .eq('coach_id', coachRow.id)
+      .order('display_order', { ascending: true })
+      .order('created_at', { ascending: true })
+      .then(({ data }) => {
+        if (data) setCoachGalleryPhotos(data as Array<{ id: string; public_url: string }>);
+      });
+  }, [coachRow?.id]);
 
   useEffect(() => {
     if (!coachRow?.id) return;

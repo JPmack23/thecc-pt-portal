@@ -27,6 +27,18 @@ export interface CoachRow {
   tiktok: string | null;
   auth_user_id: string;
   api_client_id: string;
+  // Extended preview fields — read by /photos and /packages so their preview
+  // panes show the same full profile chrome as /profile does, just with the
+  // page-specific section reflecting live edits.
+  is_personal_trainer: boolean | null;
+  is_nutritionist: boolean | null;
+  regions: string[] | null;
+  online_remote: boolean | null;
+  qualifications: string | null;
+  achievements: string | null;
+  members_deal: string | null;
+  coupon_code: string | null;
+  members_deal_active: boolean | null;
 }
 
 type CoachStatus = 'loading' | 'found' | 'not_setup';
@@ -68,7 +80,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [coachRes, roleRes] = await Promise.all([
       supabase
         .from('coaches')
-        .select('id, name, email, bio, photo_url, specialties, instagram, tiktok, auth_user_id, api_client_id')
+        .select(
+          'id, name, email, bio, photo_url, specialties, instagram, tiktok, auth_user_id, api_client_id,' +
+          ' is_personal_trainer, is_nutritionist, regions, online_remote, qualifications, achievements,' +
+          ' members_deal, coupon_code, members_deal_active',
+        )
         .eq('auth_user_id', userId)
         .eq('api_client_id', apiClientId)
         .maybeSingle(),
@@ -87,7 +103,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (coachRes.data) {
-      setCoachRow(coachRes.data as CoachRow);
+      // Cast via unknown — the Supabase select string is constructed across
+      // lines so the inferred row type is opaque to TS, but the field list
+      // matches CoachRow exactly.
+      setCoachRow(coachRes.data as unknown as CoachRow);
       setCoachStatus('found');
     } else {
       setCoachStatus('not_setup');
