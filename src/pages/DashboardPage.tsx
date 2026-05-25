@@ -56,9 +56,9 @@ export default function DashboardPage() {
             primaryColor={primaryColor}
           />
           <QuickCard
-            title="My Deals"
-            description="Publish exclusive deals for your clients"
-            href="/deals"
+            title="My Photos"
+            description="Add gallery photos shown on your profile in the app"
+            href="/photos"
             primaryColor={primaryColor}
           />
           <QuickCard

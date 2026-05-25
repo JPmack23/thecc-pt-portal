@@ -21,8 +21,8 @@ import PortalNotFoundPage from './pages/PortalNotFoundPage';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import ProfilePage from './pages/ProfilePage';
-import DealsPage from './pages/DealsPage';
 import PackagesPage from './pages/PackagesPage';
+import PhotosPage from './pages/PhotosPage';
 import NotSetupPage from './pages/NotSetupPage';
 import InviteExpiredPage from './pages/InviteExpiredPage';
 
@@ -85,14 +85,14 @@ function PortalRoutes() {
           ? <NotSetupPage />
           : <ProfilePage />
       } />
-      <Route path="/deals" element={
+      <Route path="/photos" element={
         !session
           ? <Navigate to="/login" replace />
           : coachStatus === 'loading'
           ? <LoadingScreen />
           : coachStatus === 'not_setup'
           ? <NotSetupPage />
-          : <DealsPage />
+          : <PhotosPage />
       } />
       <Route path="/packages" element={
         !session

@@ -24,7 +24,7 @@ export function PortalLayout({ children }: PortalLayoutProps) {
   const navLinks = [
     { href: '/dashboard', label: 'Dashboard' },
     { href: '/profile', label: 'My Profile' },
-    { href: '/deals', label: 'My Deals' },
+    { href: '/photos', label: 'My Photos' },
     { href: '/packages', label: 'My Packages' },
   ];
 
