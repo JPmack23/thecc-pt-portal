@@ -19,7 +19,19 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /* Path aliases — must mirror vite.config.ts resolve.alias */
+    "paths": {
+      "@mobile/coach/*": ["../thecc-plus-app/src/components/coach/*"],
+      "@mobile/theme/*": ["../thecc-plus-app/src/theme/*"]
+    },
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0"
   },
-  "include": ["src"]
+  "include": [
+    "src",
+    "../thecc-plus-app/src/components/coach/CoachProfileView.tsx",
+    "../thecc-plus-app/src/theme/tokens.ts"
+  ]
 }

@@ -26,6 +26,16 @@ import PhotosPage from './pages/PhotosPage';
 import NotSetupPage from './pages/NotSetupPage';
 import InviteExpiredPage from './pages/InviteExpiredPage';
 
+// Dev-only: local preview page for testing RNW preview component without auth.
+// Imported unconditionally (small file) but only mounted in the router when
+// VITE_DEV_AUTH_BYPASS=true. Vite tree-shakes it in production builds because
+// the env var is statically false at build time.
+import DevPreviewPage from './pages/DevPreviewPage';
+
+const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true';
+
+// ── Dev preview route — renders before auth guards (no tenant/session needed) ─
+
 // ── Global loading spinner ─────────────────────────────────────────────────
 
 function LoadingScreen() {
@@ -108,6 +118,12 @@ function PortalRoutes() {
       <Route path="/" element={
         session ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />
       } />
+
+      {/* Dev-only: RNW preview test page — not reachable in production */}
+      {DEV_AUTH_BYPASS && (
+        <Route path="/dev-preview" element={<DevPreviewPage />} />
+      )}
+
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
@@ -119,9 +135,24 @@ export default function App() {
   return (
     <TenantProvider>
       <BrowserRouter>
-        <AuthProvider>
-          <PortalRoutes />
-        </AuthProvider>
+        {/*
+         * Dev-preview is mounted outside AuthProvider so it bypasses the
+         * Supabase session check entirely. It only renders when
+         * VITE_DEV_AUTH_BYPASS=true (absent in production builds).
+         */}
+        <Routes>
+          {DEV_AUTH_BYPASS && (
+            <Route path="/dev-preview" element={<DevPreviewPage />} />
+          )}
+          <Route
+            path="*"
+            element={
+              <AuthProvider>
+                <PortalRoutes />
+              </AuthProvider>
+            }
+          />
+        </Routes>
       </BrowserRouter>
     </TenantProvider>
   );

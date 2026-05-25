@@ -2,7 +2,9 @@
  * ProfilePage — Issue #12
  *
  * PT can edit their profile: display name, bio, photo, contact email,
- * specialties (tags), Instagram handle, TikTok handle.
+ * specialties (tags), Instagram handle, TikTok handle, role flags
+ * (personal trainer / nutritionist), regions (NZ multi-select),
+ * online/remote toggle, and members deal (toggle + offer text + coupon code).
  *
  * Desktop (≥1024px): split-panel layout — form left, live mobile preview right.
  * Mobile (<1024px): single column + floating "Preview" button (bottom modal).
@@ -12,6 +14,7 @@
  *   - Edits held in local formState — preview reads from formState directly (no DB round-trip)
  *   - Photo upload creates a local object URL for the preview immediately (EC-15)
  *   - On save: PATCH coaches row via Supabase JS client (RLS: auth_user_id match)
+ *   - When members_deal_active is OFF: members_deal and coupon_code saved as NULL
  *   - Toast on success / error
  *
  * My Photos section (bottom of page):
@@ -26,7 +29,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
 import { PreviewPanel } from '../components/preview/CoachProfilePreview';
-import type { PreviewCoachData } from '../components/preview/CoachProfilePreview';
+import type { PreviewCoachData, PreviewPackage } from '../components/preview/CoachProfilePreview';
 import { PortalLayout } from '../components/PortalLayout';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -38,6 +41,25 @@ const GALLERY_BUCKET = 'branding-assets';
 const MAX_SPECIALTY_LEN = 30;
 const IG_REGEX = /^[a-zA-Z0-9._]{1,30}$/;
 const TT_REGEX = /^[a-zA-Z0-9._]{1,24}$/;
+
+const NZ_REGIONS = [
+  'Auckland',
+  'Bay of Plenty',
+  'Canterbury',
+  'Gisborne',
+  'Hawke\'s Bay',
+  'Manawatū-Whanganui',
+  'Marlborough',
+  'Nelson',
+  'Northland',
+  'Otago',
+  'Southland',
+  'Taranaki',
+  'Tasman',
+  'Waikato',
+  'Wellington',
+  'West Coast',
+];
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -59,6 +81,16 @@ interface FormState {
   photo_url: string | null;
   photo_local_url: string | null; // Object URL for preview (EC-15)
   photo_file: File | null;        // File pending upload
+  // Role flags
+  is_personal_trainer: boolean;
+  is_nutritionist: boolean;
+  // Location
+  regions: string[];
+  online_remote: boolean;
+  // Members deal
+  members_deal_active: boolean;
+  members_deal: string;
+  coupon_code: string;
 }
 
 // ── Toast component ────────────────────────────────────────────────────────
@@ -101,6 +133,9 @@ export default function ProfilePage() {
   const [galleryUploading, setGalleryUploading] = useState(false);
   const [galleryError, setGalleryError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Coach offerings — loaded for the preview panel (read-only here, edited on PackagesPage)
+  const [coachOfferings, setCoachOfferings] = useState<PreviewPackage[]>([]);
   const [form, setForm] = useState<FormState>({
     name: '',
     bio: '',
@@ -112,6 +147,13 @@ export default function ProfilePage() {
     photo_url: null,
     photo_local_url: null,
     photo_file: null,
+    is_personal_trainer: false,
+    is_nutritionist: false,
+    regions: [],
+    online_remote: false,
+    members_deal_active: false,
+    members_deal: '',
+    coupon_code: '',
   });
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -120,21 +162,29 @@ export default function ProfilePage() {
   // Initialise form from coachRow once available
   useEffect(() => {
     if (!coachRow) return;
+    const row = coachRow as any; // coachRow type may not include all new columns yet
     setForm({
-      name: coachRow.name ?? '',
-      bio: coachRow.bio ?? '',
-      email: coachRow.email ?? user?.email ?? '',
-      instagram: coachRow.instagram ?? '',
-      tiktok: coachRow.tiktok ?? '',
+      name: row.name ?? '',
+      bio: row.bio ?? '',
+      email: row.email ?? user?.email ?? '',
+      instagram: row.instagram ?? '',
+      tiktok: row.tiktok ?? '',
       specialtyInput: '',
-      specialties: coachRow.specialties ?? [],
-      photo_url: coachRow.photo_url ?? null,
+      specialties: row.specialties ?? [],
+      photo_url: row.photo_url ?? null,
       photo_local_url: null,
       photo_file: null,
+      is_personal_trainer: row.is_personal_trainer ?? false,
+      is_nutritionist: row.is_nutritionist ?? false,
+      regions: row.regions ?? [],
+      online_remote: row.online_remote ?? false,
+      members_deal_active: row.members_deal_active ?? false,
+      members_deal: row.members_deal ?? '',
+      coupon_code: row.coupon_code ?? '',
     });
   }, [coachRow?.id]);
 
-  // ── Preview data (debounced 300ms via formState — no DB round-trip) ──────
+  // ── Preview data (live from formState — no DB round-trip) ─────────────────
 
   const previewData: PreviewCoachData = {
     name: form.name || 'Your Name',
@@ -145,7 +195,17 @@ export default function ProfilePage() {
     specialties: form.specialties.length > 0 ? form.specialties : null,
     instagram: form.instagram.trim() || null,
     tiktok: form.tiktok.trim() || null,
-    is_personal_trainer: true,
+    is_personal_trainer: form.is_personal_trainer,
+    is_nutritionist: form.is_nutritionist,
+    regions: form.regions.length > 0 ? form.regions : null,
+    online_remote: form.online_remote || null,
+    // Pass members deal fields — mobile component decides whether to render
+    members_deal_active: form.members_deal_active,
+    members_deal: form.members_deal_active && form.members_deal.trim() ? form.members_deal.trim() : null,
+    coupon_code: form.members_deal_active && form.coupon_code.trim() ? form.coupon_code.trim() : null,
+    // Gallery photos and packages come from saved DB state (passed via galleryPhotos/coachOfferings below)
+    gallery_photos: galleryPhotos,
+    packages: coachOfferings,
   };
 
   // ── Handlers ──────────────────────────────────────────────────────────────
@@ -213,6 +273,16 @@ export default function ProfilePage() {
     setForm((prev) => ({ ...prev, specialties: prev.specialties.filter((s) => s !== tag) }));
   }
 
+  function toggleRegion(region: string) {
+    setForm((prev) => {
+      const has = prev.regions.includes(region);
+      return {
+        ...prev,
+        regions: has ? prev.regions.filter((r) => r !== region) : [...prev.regions, region],
+      };
+    });
+  }
+
   function validate(): boolean {
     const errors: Record<string, string> = {};
     if (!form.name.trim()) errors.name = 'Display name is required.';
@@ -273,6 +343,16 @@ export default function ProfilePage() {
         tiktok: form.tiktok.trim().replace(/^@/, '') || null,
         specialties: form.specialties.length > 0 ? form.specialties : null,
         photo_url: newPhotoUrl,
+        // Role flags
+        is_personal_trainer: form.is_personal_trainer,
+        is_nutritionist: form.is_nutritionist,
+        // Location
+        regions: form.regions,
+        online_remote: form.online_remote,
+        // Members deal — clear text columns when toggle is off
+        members_deal_active: form.members_deal_active,
+        members_deal: form.members_deal_active ? (form.members_deal.trim() || null) : null,
+        coupon_code: form.members_deal_active ? (form.coupon_code.trim() || null) : null,
         updated_at: new Date().toISOString(),
       };
 
@@ -288,7 +368,7 @@ export default function ProfilePage() {
         return;
       }
 
-      // Update local form state with the new photo URL
+      // Update local form state with the new photo URL and cleared deal text (if toggle was off)
       setForm((prev) => ({
         ...prev,
         photo_url: newPhotoUrl,
@@ -296,6 +376,8 @@ export default function ProfilePage() {
         photo_file: null,
         instagram: payload.instagram ?? '',
         tiktok: payload.tiktok ?? '',
+        members_deal: payload.members_deal ?? '',
+        coupon_code: payload.coupon_code ?? '',
       }));
 
       setToast({ message: 'Profile saved successfully.', type: 'success' });
@@ -329,6 +411,34 @@ export default function ProfilePage() {
   useEffect(() => {
     if (coachRow?.id) fetchGalleryPhotos(coachRow.id);
   }, [coachRow?.id, fetchGalleryPhotos]);
+
+  // ── Offerings: fetch for preview panel ────────────────────────────────────
+
+  useEffect(() => {
+    if (!coachRow?.id) return;
+    supabase
+      .from('pt_offerings')
+      .select('id, label, price_nzd, duration_label, promo_label, promo_active, promo_starts_at, promo_ends_at, featured_on_carousel')
+      .eq('coach_id', coachRow.id)
+      .eq('is_active', true)
+      .order('display_order', { ascending: true })
+      .then(({ data }) => {
+        if (!data) return;
+        setCoachOfferings(
+          data.map((o: any) => ({
+            id: o.id,
+            title: o.label,
+            price: o.price_nzd,
+            duration: o.duration_label ?? undefined,
+            promo_label: o.promo_label ?? undefined,
+            promo_active: o.promo_active ?? false,
+            promo_starts_at: o.promo_starts_at ?? undefined,
+            promo_ends_at: o.promo_ends_at ?? undefined,
+            featured: o.featured_on_carousel ?? false,
+          }))
+        );
+      });
+  }, [coachRow?.id]);
 
   // ── Gallery: upload ────────────────────────────────────────────────────────
 
@@ -594,6 +704,103 @@ export default function ProfilePage() {
               )}
             </div>
 
+            {/* Role flags */}
+            <div className="bg-surface rounded-2xl border border-border p-6 space-y-4">
+              <h2 className="text-text font-semibold text-sm mb-1 uppercase tracking-wide">Your role</h2>
+              <p className="text-text-subtle text-xs -mt-2">Both can apply — this controls the title shown under your name.</p>
+
+              <ToggleRow
+                label="Personal Trainer"
+                description="Shown as 'PERSONAL TRAINER' on your profile"
+                checked={form.is_personal_trainer}
+                onChange={(v) => setField('is_personal_trainer', v)}
+                primary={primary}
+              />
+              <ToggleRow
+                label="Nutritionist"
+                description="Shown as 'PERFORMANCE NUTRITIONIST' when active (takes priority)"
+                checked={form.is_nutritionist}
+                onChange={(v) => setField('is_nutritionist', v)}
+                primary={primary}
+              />
+            </div>
+
+            {/* Regions */}
+            <div className="bg-surface rounded-2xl border border-border p-6">
+              <h2 className="text-text font-semibold text-sm mb-1 uppercase tracking-wide">Where you work</h2>
+              <p className="text-text-subtle text-xs mb-4">Select all regions you service in person.</p>
+
+              <div className="flex flex-wrap gap-2 mb-4">
+                {NZ_REGIONS.map((region) => {
+                  const selected = form.regions.includes(region);
+                  return (
+                    <button
+                      key={region}
+                      type="button"
+                      onClick={() => toggleRegion(region)}
+                      className="px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors"
+                      style={
+                        selected
+                          ? { backgroundColor: primary, borderColor: primary, color: '#000000' }
+                          : { backgroundColor: 'transparent', borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }
+                      }
+                    >
+                      {region}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <ToggleRow
+                label="Online / Remote"
+                description="You work with clients outside your region or online"
+                checked={form.online_remote}
+                onChange={(v) => setField('online_remote', v)}
+                primary={primary}
+              />
+            </div>
+
+            {/* Members deal */}
+            <div className="bg-surface rounded-2xl border border-border p-6 space-y-4">
+              <h2 className="text-text font-semibold text-sm mb-1 uppercase tracking-wide">Members deal</h2>
+              <p className="text-text-subtle text-xs -mt-2">Offer something exclusive to THECC+ members.</p>
+
+              <ToggleRow
+                label="Offer a members-only deal"
+                description="Show a special offer card on your profile"
+                checked={form.members_deal_active}
+                onChange={(v) => setField('members_deal_active', v)}
+                primary={primary}
+              />
+
+              {form.members_deal_active && (
+                <div className="space-y-4 pt-2">
+                  <FormField label="Deal description" hint='e.g. "20% off your first 3 sessions"'>
+                    <input
+                      type="text"
+                      value={form.members_deal}
+                      onChange={(e) => setField('members_deal', e.target.value)}
+                      placeholder="20% off your first 3 sessions"
+                      maxLength={120}
+                      className="w-full bg-surface-alt border border-border rounded-xl px-4 py-3 text-text placeholder-text-subtle text-sm focus:outline-none focus:ring-2"
+                      style={{ '--tw-ring-color': primary } as React.CSSProperties}
+                    />
+                  </FormField>
+                  <FormField label="Coupon code" hint='e.g. "THECC20" — shown in a badge on your profile'>
+                    <input
+                      type="text"
+                      value={form.coupon_code}
+                      onChange={(e) => setField('coupon_code', e.target.value.toUpperCase())}
+                      placeholder="THECC20"
+                      maxLength={20}
+                      className="w-full bg-surface-alt border border-border rounded-xl px-4 py-3 text-text placeholder-text-subtle text-sm font-mono focus:outline-none focus:ring-2"
+                      style={{ '--tw-ring-color': primary } as React.CSSProperties}
+                    />
+                  </FormField>
+                </div>
+              )}
+            </div>
+
             {/* Social handles */}
             <div className="bg-surface rounded-2xl border border-border p-6 space-y-4">
               <h2 className="text-text font-semibold text-sm mb-1 uppercase tracking-wide">Social handles</h2>
@@ -779,6 +986,44 @@ function FormField({
       {children}
       {hint && !error && <p className="text-text-subtle text-xs mt-1">{hint}</p>}
       {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
+    </div>
+  );
+}
+
+// ── ToggleRow helper ───────────────────────────────────────────────────────
+
+function ToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+  primary,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  primary: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex-1 min-w-0">
+        <p className="text-text text-sm font-medium leading-tight">{label}</p>
+        {description && <p className="text-text-subtle text-xs mt-0.5 leading-tight">{description}</p>}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none"
+        style={{ backgroundColor: checked ? primary : 'var(--color-border)' }}
+      >
+        <span
+          className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-200"
+          style={{ transform: checked ? 'translateX(20px)' : 'translateX(0)' }}
+        />
+      </button>
     </div>
   );
 }

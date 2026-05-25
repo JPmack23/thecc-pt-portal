@@ -26,6 +26,13 @@ interface PtOffering {
   cta_url: string | null;
   display_order: number;
   is_active: boolean;
+  featured_on_carousel: boolean;
+  // Promo fields (migration 7)
+  promo_label: string | null;
+  promo_description: string | null;
+  promo_active: boolean;
+  promo_starts_at: string | null;
+  promo_ends_at: string | null;
   created_at: string;
 }
 
@@ -36,6 +43,12 @@ interface OfferingFormState {
   duration_label: string;
   cta_label: string;
   cta_url: string;
+  // Promo
+  promo_active: boolean;
+  promo_label: string;
+  promo_description: string;
+  promo_starts_at: string;
+  promo_ends_at: string;
 }
 
 const MAX_PACKAGES = 10;
@@ -47,7 +60,21 @@ const EMPTY_FORM: OfferingFormState = {
   duration_label: '',
   cta_label: 'Book now',
   cta_url: '',
+  promo_active: false,
+  promo_label: '',
+  promo_description: '',
+  promo_starts_at: '',
+  promo_ends_at: '',
 };
+
+// Helper: is a promo currently in range?
+function promoIsLive(pkg: PtOffering): boolean {
+  if (!pkg.promo_active) return false;
+  const now = Date.now();
+  if (pkg.promo_starts_at && new Date(pkg.promo_starts_at).getTime() > now) return false;
+  if (pkg.promo_ends_at && new Date(pkg.promo_ends_at).getTime() < now) return false;
+  return true;
+}
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 
@@ -116,6 +143,8 @@ function PackageCard({
   onMoveUp: (o: PtOffering) => void;
   onMoveDown: (o: PtOffering) => void;
 }) {
+  const promoLive = promoIsLive(offering);
+
   return (
     <div className="bg-surface border border-border rounded-2xl p-5 flex gap-3 items-start">
       {/* Reorder buttons */}
@@ -140,10 +169,35 @@ function PackageCard({
 
       {/* Content */}
       <div className="flex-1 min-w-0">
+        {/* Promo badge row */}
+        {promoLive && offering.promo_label && (
+          <div className="flex items-center gap-2 mb-2">
+            <span className="bg-yellow-400 text-black text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded">
+              {offering.promo_label}
+            </span>
+            {offering.featured_on_carousel && (
+              <span
+                className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border"
+                style={{ color: primary, borderColor: primary }}
+              >
+                Featured
+              </span>
+            )}
+          </div>
+        )}
+        {/* Inactive promo indicator */}
+        {offering.promo_active && !promoLive && (
+          <div className="mb-2">
+            <span className="text-[10px] font-semibold text-text-subtle border border-border px-2 py-0.5 rounded">
+              Promo (inactive / out of date range)
+            </span>
+          </div>
+        )}
+
         <div className="flex items-start justify-between gap-2 mb-1">
           <h3 className="text-text font-semibold text-sm">{offering.label}</h3>
           <span className="text-lg font-bold flex-shrink-0" style={{ color: primary }}>
-            ${offering.price_nzd.toFixed(2)}
+            ${offering.price_nzd % 1 === 0 ? Number(offering.price_nzd).toFixed(0) : Number(offering.price_nzd).toFixed(2)}
             <span className="text-text-subtle text-xs font-normal ml-0.5">NZD</span>
           </span>
         </div>
@@ -207,15 +261,30 @@ function PackageFormModal({
           duration_label: offering.duration_label ?? '',
           cta_label: offering.cta_label ?? 'Book now',
           cta_url: offering.cta_url ?? '',
+          promo_active: offering.promo_active ?? false,
+          promo_label: offering.promo_label ?? '',
+          promo_description: offering.promo_description ?? '',
+          promo_starts_at: offering.promo_starts_at
+            ? offering.promo_starts_at.slice(0, 16)  // trim to datetime-local format
+            : '',
+          promo_ends_at: offering.promo_ends_at
+            ? offering.promo_ends_at.slice(0, 16)
+            : '',
         }
       : EMPTY_FORM,
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  function set<K extends keyof OfferingFormState>(key: K, value: string) {
+  type StringOfferingKeys = { [K in keyof OfferingFormState]: OfferingFormState[K] extends string ? K : never }[keyof OfferingFormState];
+
+  function set(key: StringOfferingKeys, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
     setErrors((prev) => { const n = { ...prev }; delete n[key]; return n; });
+  }
+
+  function togglePromo() {
+    setForm((prev) => ({ ...prev, promo_active: !prev.promo_active }));
   }
 
   function validate(): boolean {
@@ -230,6 +299,11 @@ function PackageFormModal({
     if (form.cta_url && !/^https:\/\//i.test(form.cta_url)) {
       e.cta_url = 'Link must start with https://';
     }
+    if (form.promo_active && !form.promo_label.trim()) {
+      e.promo_label = 'Promo badge text is required when promo is active.';
+    }
+    if (form.promo_label.length > 40) e.promo_label = 'Max 40 characters.';
+    if (form.promo_description.length > 200) e.promo_description = 'Max 200 characters.';
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -322,6 +396,84 @@ function PackageFormModal({
             />
           </ModalField>
 
+          {/* ── Promo section ────────────────────────────────────────── */}
+          <div className="border-t border-border pt-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-text text-sm font-semibold">Promo offer</p>
+                <p className="text-text-subtle text-xs mt-0.5">Show a badge on this package in the app</p>
+              </div>
+              {/* Toggle */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={form.promo_active}
+                onClick={togglePromo}
+                className="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none"
+                style={{ backgroundColor: form.promo_active ? primary : 'var(--color-border)' }}
+              >
+                <span
+                  className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-200"
+                  style={{ transform: form.promo_active ? 'translateX(20px)' : 'translateX(0)' }}
+                />
+              </button>
+            </div>
+
+            {form.promo_active && (
+              <div className="space-y-3">
+                <ModalField label="Badge text *" error={errors.promo_label}>
+                  <input
+                    type="text"
+                    value={form.promo_label}
+                    onChange={(e) => set('promo_label', e.target.value)}
+                    maxLength={45}
+                    placeholder="e.g. BUY 10 GET 5 FREE"
+                    className="w-full bg-canvas border border-border rounded-xl px-4 py-2.5 text-text text-sm font-mono uppercase focus:outline-none"
+                  />
+                </ModalField>
+
+                <ModalField label="Promo description (optional)" error={errors.promo_description}>
+                  <textarea
+                    value={form.promo_description}
+                    onChange={(e) => set('promo_description', e.target.value)}
+                    rows={2}
+                    maxLength={210}
+                    placeholder="Extra detail shown under the badge…"
+                    className="w-full bg-canvas border border-border rounded-xl px-4 py-2.5 text-text text-sm focus:outline-none resize-none"
+                  />
+                </ModalField>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <ModalField label="Start date (optional)">
+                    <input
+                      type="datetime-local"
+                      value={form.promo_starts_at}
+                      onChange={(e) => set('promo_starts_at', e.target.value)}
+                      className="w-full bg-canvas border border-border rounded-xl px-3 py-2.5 text-text text-xs focus:outline-none"
+                    />
+                  </ModalField>
+                  <ModalField label="End date (optional)">
+                    <input
+                      type="datetime-local"
+                      value={form.promo_ends_at}
+                      onChange={(e) => set('promo_ends_at', e.target.value)}
+                      className="w-full bg-canvas border border-border rounded-xl px-3 py-2.5 text-text text-xs focus:outline-none"
+                    />
+                  </ModalField>
+                </div>
+
+                <div className="rounded-xl bg-surface-alt border border-border px-3 py-2">
+                  <p className="text-text-subtle text-xs">
+                    <strong className="text-text-muted">Featured on carousel</strong> — controlled by Tyler from the admin view, not editable here.
+                    {offering?.featured_on_carousel && (
+                      <span className="ml-2 text-yellow-400 font-semibold">Currently featured</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl text-sm font-medium text-text-muted border border-border hover:text-text transition-colors">Cancel</button>
             <button
@@ -389,7 +541,7 @@ export default function PackagesPage() {
     if (!coachRow) return;
     const { data, error } = await supabase
       .from('pt_offerings')
-      .select('*')
+      .select('id, label, description, price_nzd, duration_label, cta_label, cta_url, display_order, is_active, featured_on_carousel, promo_label, promo_description, promo_active, promo_starts_at, promo_ends_at, created_at')
       .eq('coach_id', coachRow.id)
       .eq('is_active', true)
       .order('display_order', { ascending: true })
@@ -418,6 +570,12 @@ export default function PackagesPage() {
       duration_label: form.duration_label.trim() || null,
       cta_label: form.cta_label.trim() || null,
       cta_url: form.cta_url.trim() || null,
+      // Promo fields — clear text when toggled off
+      promo_active: form.promo_active,
+      promo_label: form.promo_active ? (form.promo_label.trim() || null) : null,
+      promo_description: form.promo_active ? (form.promo_description.trim() || null) : null,
+      promo_starts_at: form.promo_active && form.promo_starts_at ? new Date(form.promo_starts_at).toISOString() : null,
+      promo_ends_at: form.promo_active && form.promo_ends_at ? new Date(form.promo_ends_at).toISOString() : null,
     };
 
     if (offeringId) {
