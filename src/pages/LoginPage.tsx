@@ -77,7 +77,12 @@ export default function LoginPage() {
         {/* Logo / wordmark */}
         <div className="flex flex-col items-center mb-10">
           {logoUrl ? (
-            <img src={logoUrl} alt={portalTitle} className="h-14 mb-4 object-contain" />
+            <img
+              src={logoUrl}
+              alt={portalTitle}
+              className="h-14 mb-4 object-contain"
+              style={{ border: 'none', borderRadius: 0, background: 'none', padding: 0, boxShadow: 'none' }}
+            />
           ) : (
             <div
               className="h-14 w-14 rounded-full flex items-center justify-center mb-4 font-bold text-2xl"

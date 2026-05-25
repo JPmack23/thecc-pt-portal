@@ -35,7 +35,12 @@ export function PortalLayout({ children }: PortalLayoutProps) {
         {/* Logo / app name */}
         <a href="/dashboard" className="flex items-center gap-2 flex-shrink-0">
           {tenant?.logo_url ? (
-            <img src={tenant.logo_url} alt={tenant.app_name} className="h-7 object-contain" />
+            <img
+              src={tenant.logo_url}
+              alt={tenant.app_name}
+              className="h-7 object-contain"
+              style={{ border: 'none', borderRadius: 0, background: 'none', padding: 0, boxShadow: 'none' }}
+            />
           ) : (
             <span className="text-text font-bold text-base">{tenant?.app_name ?? 'Coach Portal'}</span>
           )}
