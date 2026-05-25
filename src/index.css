@@ -1,3 +1,6 @@
+/* Google Fonts — must be first (before @tailwind directives) */
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@500;700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -14,6 +17,74 @@
   --color-text: #FFFFFF;
   --color-text-muted: #AAAAAA;
   --color-text-subtle: #777777;
+}
+
+/* ── React Native Web font family mappings ───────────────────────────────
+ * CoachProfileView.tsx uses fontFamily names defined in thecc-plus-app's
+ * tokens.ts (e.g. 'FilsonPro_Heavy', 'Inter_Regular'). React Native Web
+ * passes these as CSS font-family values. The rules below map each mobile
+ * font name to a real web font stack so the preview renders correctly.
+ *
+ * FilsonPro is a commercial font — we fall back to 'Outfit' (Google Fonts,
+ * free) which is a geometric sans-serif with a similar chunky/friendly heavy
+ * display character. Inter and JetBrains Mono are loaded from Google Fonts
+ * via @import at the top of this file.
+ */
+
+/*
+ * RNW sets font-family as an inline style from StyleSheet objects.
+ * We can't target these with a CSS selector, so instead we inject the
+ * mapping through a CSS @font-face rule using the exact font-family
+ * name that the mobile code requests. The browser will then resolve
+ * 'FilsonPro_Heavy' → Outfit 900, 'FilsonPro_Bold' → Outfit 700, etc.
+ */
+
+@font-face {
+  font-family: 'FilsonPro_Heavy';
+  src: local('Outfit');
+  font-weight: 900;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'FilsonPro_Bold';
+  src: local('Outfit');
+  font-weight: 700;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'FilsonPro_Medium';
+  src: local('Outfit');
+  font-weight: 500;
+  font-style: normal;
+}
+
+/* Inter variants — map mobile names to Inter weights */
+@font-face {
+  font-family: 'Inter_Regular';
+  src: local('Inter'), local('system-ui');
+  font-weight: 400;
+}
+@font-face {
+  font-family: 'Inter_Medium';
+  src: local('Inter'), local('system-ui');
+  font-weight: 500;
+}
+@font-face {
+  font-family: 'Inter_SemiBold';
+  src: local('Inter'), local('system-ui');
+  font-weight: 600;
+}
+@font-face {
+  font-family: 'Inter_Bold';
+  src: local('Inter'), local('system-ui');
+  font-weight: 700;
+}
+
+/* JetBrains Mono */
+@font-face {
+  font-family: 'JetBrainsMono_Regular';
+  src: local('JetBrains Mono'), local('Courier New');
+  font-weight: 400;
 }
 
 /* Base resets */
