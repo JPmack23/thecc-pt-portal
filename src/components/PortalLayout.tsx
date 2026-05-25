@@ -16,7 +16,7 @@ interface PortalLayoutProps {
 }
 
 export function PortalLayout({ children }: PortalLayoutProps) {
-  const { signOut, coachRow } = useAuth();
+  const { signOut, coachRow, isOrgAdmin } = useAuth();
   const { tenant } = useTenant();
   const primary = tenant?.primary_color ?? '#FFD600';
   const currentPath = window.location.pathname;
@@ -26,6 +26,8 @@ export function PortalLayout({ children }: PortalLayoutProps) {
     { href: '/profile', label: 'My Profile' },
     { href: '/photos', label: 'My Photos' },
     { href: '/packages', label: 'My Packages' },
+    // org_admin only — not shown to regular PTs
+    ...(isOrgAdmin ? [{ href: '/admin/roles', label: 'Manage Roles' }] : []),
   ];
 
   return (

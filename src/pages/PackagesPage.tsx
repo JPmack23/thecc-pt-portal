@@ -14,6 +14,56 @@ import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
 import { PortalLayout } from '../components/PortalLayout';
 
+// ── Carousel conflict confirmation modal ───────────────────────────────────────
+// Shown when Tyler tries to feature a package for a PT who already has one featured.
+
+function CarouselConflictModal({
+  existingLabel,
+  newLabel,
+  onConfirm,
+  onCancel,
+  primary,
+}: {
+  existingLabel: string;
+  newLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  primary: string;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-surface rounded-2xl border border-border p-6">
+        <h3 className="text-text font-bold text-base mb-2">Replace featured package?</h3>
+        <p className="text-text-muted text-sm mb-4">
+          This PT already has a featured package on the home carousel:
+        </p>
+        <div className="bg-surface-alt border border-border rounded-xl px-3 py-2 mb-4">
+          <p className="text-text text-sm font-semibold">{existingLabel}</p>
+          <p className="text-text-subtle text-xs mt-0.5">Currently featured</p>
+        </div>
+        <p className="text-text-muted text-sm mb-6">
+          Featuring <strong className="text-text">{newLabel}</strong> will remove the previous one from the carousel.
+        </p>
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 py-2.5 rounded-xl text-sm font-medium text-text-muted border border-border hover:text-text transition-colors"
+          >
+            Keep current
+          </button>
+          <button
+            onClick={onConfirm}
+            className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
+            style={{ backgroundColor: primary, color: '#000000' }}
+          >
+            Replace it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface PtOffering {
@@ -26,6 +76,13 @@ interface PtOffering {
   cta_url: string | null;
   display_order: number;
   is_active: boolean;
+  featured_on_carousel: boolean;
+  // Promo fields (migration 7)
+  promo_label: string | null;
+  promo_description: string | null;
+  promo_active: boolean;
+  promo_starts_at: string | null;
+  promo_ends_at: string | null;
   created_at: string;
 }
 
@@ -36,6 +93,12 @@ interface OfferingFormState {
   duration_label: string;
   cta_label: string;
   cta_url: string;
+  // Promo
+  promo_active: boolean;
+  promo_label: string;
+  promo_description: string;
+  promo_starts_at: string;
+  promo_ends_at: string;
 }
 
 const MAX_PACKAGES = 10;
@@ -47,7 +110,21 @@ const EMPTY_FORM: OfferingFormState = {
   duration_label: '',
   cta_label: 'Book now',
   cta_url: '',
+  promo_active: false,
+  promo_label: '',
+  promo_description: '',
+  promo_starts_at: '',
+  promo_ends_at: '',
 };
+
+// Helper: is a promo currently in range?
+function promoIsLive(pkg: PtOffering): boolean {
+  if (!pkg.promo_active) return false;
+  const now = Date.now();
+  if (pkg.promo_starts_at && new Date(pkg.promo_starts_at).getTime() > now) return false;
+  if (pkg.promo_ends_at && new Date(pkg.promo_ends_at).getTime() < now) return false;
+  return true;
+}
 
 // ── Toast ──────────────────────────────────────────────────────────────────
 
@@ -102,20 +179,28 @@ function PackageCard({
   primary,
   isFirst,
   isLast,
+  isOrgAdmin,
   onEdit,
   onDelete,
   onMoveUp,
   onMoveDown,
+  onToggleFeatured,
 }: {
   offering: PtOffering;
   primary: string;
   isFirst: boolean;
   isLast: boolean;
+  /** Org admin sees the featured toggle; PTs see a read-only badge */
+  isOrgAdmin: boolean;
   onEdit: (o: PtOffering) => void;
   onDelete: (o: PtOffering) => void;
   onMoveUp: (o: PtOffering) => void;
   onMoveDown: (o: PtOffering) => void;
+  /** Called when org admin flips the featured toggle */
+  onToggleFeatured: (o: PtOffering) => void;
 }) {
+  const promoLive = promoIsLive(offering);
+
   return (
     <div className="bg-surface border border-border rounded-2xl p-5 flex gap-3 items-start">
       {/* Reorder buttons */}
@@ -140,10 +225,35 @@ function PackageCard({
 
       {/* Content */}
       <div className="flex-1 min-w-0">
+        {/* Promo badge row */}
+        {promoLive && offering.promo_label && (
+          <div className="flex items-center gap-2 mb-2">
+            <span className="bg-yellow-400 text-black text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded">
+              {offering.promo_label}
+            </span>
+            {offering.featured_on_carousel && (
+              <span
+                className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border"
+                style={{ color: primary, borderColor: primary }}
+              >
+                Featured
+              </span>
+            )}
+          </div>
+        )}
+        {/* Inactive promo indicator */}
+        {offering.promo_active && !promoLive && (
+          <div className="mb-2">
+            <span className="text-[10px] font-semibold text-text-subtle border border-border px-2 py-0.5 rounded">
+              Promo (inactive / out of date range)
+            </span>
+          </div>
+        )}
+
         <div className="flex items-start justify-between gap-2 mb-1">
           <h3 className="text-text font-semibold text-sm">{offering.label}</h3>
           <span className="text-lg font-bold flex-shrink-0" style={{ color: primary }}>
-            ${offering.price_nzd.toFixed(2)}
+            ${offering.price_nzd % 1 === 0 ? Number(offering.price_nzd).toFixed(0) : Number(offering.price_nzd).toFixed(2)}
             <span className="text-text-subtle text-xs font-normal ml-0.5">NZD</span>
           </span>
         </div>
@@ -166,8 +276,8 @@ function PackageCard({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-col gap-1 flex-shrink-0">
+      {/* Actions + featured toggle */}
+      <div className="flex flex-col gap-1 flex-shrink-0 items-end">
         <button
           onClick={() => onEdit(offering)}
           className="text-text-muted hover:text-text text-xs px-2 py-1 rounded-lg hover:bg-surface-alt transition-colors"
@@ -180,6 +290,38 @@ function PackageCard({
         >
           Remove
         </button>
+
+        {/* Featured on carousel — org_admin toggle / PT read-only badge */}
+        <div className="mt-2 border-t border-border pt-2 w-full">
+          {isOrgAdmin ? (
+            <div className="flex flex-col gap-1">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={offering.featured_on_carousel}
+                onClick={() => onToggleFeatured(offering)}
+                title="Feature on home carousel"
+                className="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none self-end"
+                style={{ backgroundColor: offering.featured_on_carousel ? primary : 'var(--color-border)' }}
+              >
+                <span
+                  className="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200"
+                  style={{ transform: offering.featured_on_carousel ? 'translateX(16px)' : 'translateX(0)' }}
+                />
+              </button>
+              <p className="text-text-subtle text-[10px] text-right leading-tight">
+                {offering.featured_on_carousel ? 'On carousel' : 'Carousel'}
+              </p>
+            </div>
+          ) : offering.featured_on_carousel ? (
+            <span
+              className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border"
+              style={{ color: primary, borderColor: primary + '66' }}
+            >
+              Featured by Tyler
+            </span>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -207,15 +349,30 @@ function PackageFormModal({
           duration_label: offering.duration_label ?? '',
           cta_label: offering.cta_label ?? 'Book now',
           cta_url: offering.cta_url ?? '',
+          promo_active: offering.promo_active ?? false,
+          promo_label: offering.promo_label ?? '',
+          promo_description: offering.promo_description ?? '',
+          promo_starts_at: offering.promo_starts_at
+            ? offering.promo_starts_at.slice(0, 16)  // trim to datetime-local format
+            : '',
+          promo_ends_at: offering.promo_ends_at
+            ? offering.promo_ends_at.slice(0, 16)
+            : '',
         }
       : EMPTY_FORM,
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  function set<K extends keyof OfferingFormState>(key: K, value: string) {
+  type StringOfferingKeys = { [K in keyof OfferingFormState]: OfferingFormState[K] extends string ? K : never }[keyof OfferingFormState];
+
+  function set(key: StringOfferingKeys, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
     setErrors((prev) => { const n = { ...prev }; delete n[key]; return n; });
+  }
+
+  function togglePromo() {
+    setForm((prev) => ({ ...prev, promo_active: !prev.promo_active }));
   }
 
   function validate(): boolean {
@@ -230,6 +387,11 @@ function PackageFormModal({
     if (form.cta_url && !/^https:\/\//i.test(form.cta_url)) {
       e.cta_url = 'Link must start with https://';
     }
+    if (form.promo_active && !form.promo_label.trim()) {
+      e.promo_label = 'Promo badge text is required when promo is active.';
+    }
+    if (form.promo_label.length > 40) e.promo_label = 'Max 40 characters.';
+    if (form.promo_description.length > 200) e.promo_description = 'Max 200 characters.';
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -322,6 +484,84 @@ function PackageFormModal({
             />
           </ModalField>
 
+          {/* ── Promo section ────────────────────────────────────────── */}
+          <div className="border-t border-border pt-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-text text-sm font-semibold">Promo offer</p>
+                <p className="text-text-subtle text-xs mt-0.5">Show a badge on this package in the app</p>
+              </div>
+              {/* Toggle */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={form.promo_active}
+                onClick={togglePromo}
+                className="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none"
+                style={{ backgroundColor: form.promo_active ? primary : 'var(--color-border)' }}
+              >
+                <span
+                  className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform duration-200"
+                  style={{ transform: form.promo_active ? 'translateX(20px)' : 'translateX(0)' }}
+                />
+              </button>
+            </div>
+
+            {form.promo_active && (
+              <div className="space-y-3">
+                <ModalField label="Badge text *" error={errors.promo_label}>
+                  <input
+                    type="text"
+                    value={form.promo_label}
+                    onChange={(e) => set('promo_label', e.target.value)}
+                    maxLength={45}
+                    placeholder="e.g. BUY 10 GET 5 FREE"
+                    className="w-full bg-canvas border border-border rounded-xl px-4 py-2.5 text-text text-sm font-mono uppercase focus:outline-none"
+                  />
+                </ModalField>
+
+                <ModalField label="Promo description (optional)" error={errors.promo_description}>
+                  <textarea
+                    value={form.promo_description}
+                    onChange={(e) => set('promo_description', e.target.value)}
+                    rows={2}
+                    maxLength={210}
+                    placeholder="Extra detail shown under the badge…"
+                    className="w-full bg-canvas border border-border rounded-xl px-4 py-2.5 text-text text-sm focus:outline-none resize-none"
+                  />
+                </ModalField>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <ModalField label="Start date (optional)">
+                    <input
+                      type="datetime-local"
+                      value={form.promo_starts_at}
+                      onChange={(e) => set('promo_starts_at', e.target.value)}
+                      className="w-full bg-canvas border border-border rounded-xl px-3 py-2.5 text-text text-xs focus:outline-none"
+                    />
+                  </ModalField>
+                  <ModalField label="End date (optional)">
+                    <input
+                      type="datetime-local"
+                      value={form.promo_ends_at}
+                      onChange={(e) => set('promo_ends_at', e.target.value)}
+                      className="w-full bg-canvas border border-border rounded-xl px-3 py-2.5 text-text text-xs focus:outline-none"
+                    />
+                  </ModalField>
+                </div>
+
+                <div className="rounded-xl bg-surface-alt border border-border px-3 py-2">
+                  <p className="text-text-subtle text-xs">
+                    <strong className="text-text-muted">Featured on carousel</strong> — controlled by Tyler from the admin view, not editable here.
+                    {offering?.featured_on_carousel && (
+                      <span className="ml-2 text-yellow-400 font-semibold">Currently featured</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl text-sm font-medium text-text-muted border border-border hover:text-text transition-colors">Cancel</button>
             <button
@@ -373,7 +613,7 @@ function ModalField({ label, error, children }: { label: string; error?: string;
 // ── Main page ──────────────────────────────────────────────────────────────
 
 export default function PackagesPage() {
-  const { coachRow } = useAuth();
+  const { coachRow, isOrgAdmin } = useAuth();
   const { tenant } = useTenant();
   const primary = tenant?.primary_color ?? '#FFD600';
 
@@ -385,11 +625,17 @@ export default function PackagesPage() {
   const [deletingOffering, setDeletingOffering] = useState<PtOffering | null>(null);
   const [reordering, setReordering] = useState(false);
 
+  // Carousel conflict modal — shown when Tyler tries to feature a second package for the same PT
+  const [carouselConflict, setCarouselConflict] = useState<{
+    existingOffering: PtOffering;
+    newOffering: PtOffering;
+  } | null>(null);
+
   const fetchOfferings = useCallback(async () => {
     if (!coachRow) return;
     const { data, error } = await supabase
       .from('pt_offerings')
-      .select('*')
+      .select('id, label, description, price_nzd, duration_label, cta_label, cta_url, display_order, is_active, featured_on_carousel, promo_label, promo_description, promo_active, promo_starts_at, promo_ends_at, created_at')
       .eq('coach_id', coachRow.id)
       .eq('is_active', true)
       .order('display_order', { ascending: true })
@@ -418,6 +664,12 @@ export default function PackagesPage() {
       duration_label: form.duration_label.trim() || null,
       cta_label: form.cta_label.trim() || null,
       cta_url: form.cta_url.trim() || null,
+      // Promo fields — clear text when toggled off
+      promo_active: form.promo_active,
+      promo_label: form.promo_active ? (form.promo_label.trim() || null) : null,
+      promo_description: form.promo_active ? (form.promo_description.trim() || null) : null,
+      promo_starts_at: form.promo_active && form.promo_starts_at ? new Date(form.promo_starts_at).toISOString() : null,
+      promo_ends_at: form.promo_active && form.promo_ends_at ? new Date(form.promo_ends_at).toISOString() : null,
     };
 
     if (offeringId) {
@@ -484,6 +736,69 @@ export default function PackagesPage() {
     setReordering(false);
   }
 
+  /**
+   * handleToggleFeatured — called when Tyler clicks the carousel toggle on a package.
+   *
+   * If the target offering is currently featured, just un-feature it (simple PATCH).
+   * If it's currently not featured, check whether this coach already has another
+   * featured offering. If yes → show CarouselConflictModal. If no → PATCH directly.
+   *
+   * The soft warning (not a DB constraint) matches Walter's spec: "Only one package per PT
+   * should be featured. Featuring multiple packages stacks them on the carousel."
+   */
+  async function handleToggleFeatured(offering: PtOffering) {
+    if (!isOrgAdmin) return;
+
+    const newValue = !offering.featured_on_carousel;
+
+    // Un-featuring: simple PATCH, no conflict check needed
+    if (!newValue) {
+      await applyFeaturedToggle(offering, false);
+      return;
+    }
+
+    // Featuring: check for existing featured package for the same coach
+    const existingFeatured = offerings.find(
+      (o) => o.id !== offering.id && o.featured_on_carousel
+    );
+
+    if (existingFeatured) {
+      // Show conflict modal — let Tyler decide
+      setCarouselConflict({ existingOffering: existingFeatured, newOffering: offering });
+    } else {
+      await applyFeaturedToggle(offering, true);
+    }
+  }
+
+  /** Actually PATCH the featured_on_carousel value, optionally clearing the previous one first. */
+  async function applyFeaturedToggle(offering: PtOffering, newValue: boolean, replacingId?: string) {
+    const result1 = await supabase
+      .from('pt_offerings')
+      .update({ featured_on_carousel: newValue, updated_at: new Date().toISOString() })
+      .eq('id', offering.id);
+
+    let result2: { error: any } | null = null;
+    if (replacingId) {
+      result2 = await supabase
+        .from('pt_offerings')
+        .update({ featured_on_carousel: false, updated_at: new Date().toISOString() })
+        .eq('id', replacingId);
+    }
+
+    const hasError = !!result1.error || !!result2?.error;
+
+    if (hasError) {
+      setToast({ message: 'Failed to update carousel status.', type: 'error' });
+    } else {
+      setToast({
+        message: newValue ? 'Package featured on home carousel.' : 'Package removed from carousel.',
+        type: 'success',
+      });
+      fetchOfferings();
+    }
+    setCarouselConflict(null);
+  }
+
   return (
     <PortalLayout>
       {toast && <Toast message={toast.message} type={toast.type} onDismiss={() => setToast(null)} />}
@@ -502,6 +817,22 @@ export default function PackagesPage() {
           offering={deletingOffering}
           onConfirm={handleDelete}
           onCancel={() => setDeletingOffering(null)}
+        />
+      )}
+
+      {carouselConflict && (
+        <CarouselConflictModal
+          existingLabel={carouselConflict.existingOffering.label}
+          newLabel={carouselConflict.newOffering.label}
+          primary={primary}
+          onConfirm={() =>
+            applyFeaturedToggle(
+              carouselConflict.newOffering,
+              true,
+              carouselConflict.existingOffering.id
+            )
+          }
+          onCancel={() => setCarouselConflict(null)}
         />
       )}
 
@@ -527,6 +858,16 @@ export default function PackagesPage() {
           )}
         </div>
 
+        {/* Soft warning — carousel feature limit (org_admin only) */}
+        {isOrgAdmin && offerings.length > 0 && (
+          <div className="mb-4 rounded-xl bg-surface-alt border border-border px-4 py-2.5 flex items-start gap-2">
+            <span className="text-text-muted text-xs mt-0.5">ℹ</span>
+            <p className="text-text-muted text-xs leading-relaxed">
+              <strong className="text-text">Carousel tip:</strong> Only one package per PT should be featured on the home carousel at a time. Use the toggle on each package to control what members see.
+            </p>
+          </div>
+        )}
+
         {/* Reordering indicator */}
         {reordering && (
           <div className="mb-3 flex items-center gap-2 text-text-muted text-xs">
@@ -551,10 +892,12 @@ export default function PackagesPage() {
                 primary={primary}
                 isFirst={idx === 0}
                 isLast={idx === offerings.length - 1}
+                isOrgAdmin={isOrgAdmin}
                 onEdit={(offering) => setEditingOffering(offering)}
                 onDelete={(offering) => setDeletingOffering(offering)}
                 onMoveUp={(offering) => moveOffering(offering, 'up')}
                 onMoveDown={(offering) => moveOffering(offering, 'down')}
+                onToggleFeatured={handleToggleFeatured}
               />
             ))}
             {offerings.length >= MAX_PACKAGES && (

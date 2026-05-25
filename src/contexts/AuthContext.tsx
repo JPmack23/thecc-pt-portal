@@ -37,6 +37,8 @@ interface AuthContextValue {
   coachRow: CoachRow | null;
   coachStatus: CoachStatus;
   authLoading: boolean;
+  /** True when the authenticated user has the organisation_admin role for this tenant. */
+  isOrgAdmin: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -46,6 +48,7 @@ const AuthContext = createContext<AuthContextValue>({
   coachRow: null,
   coachStatus: 'loading',
   authLoading: true,
+  isOrgAdmin: false,
   signOut: async () => {},
 });
 
@@ -56,28 +59,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [coachRow, setCoachRow] = useState<CoachRow | null>(null);
   const [coachStatus, setCoachStatus] = useState<CoachStatus>('loading');
   const [authLoading, setAuthLoading] = useState(true);
+  const [isOrgAdmin, setIsOrgAdmin] = useState(false);
 
   const resolveCoachRow = async (userId: string, apiClientId: string) => {
     setCoachStatus('loading');
-    const { data, error } = await supabase
-      .from('coaches')
-      .select('id, name, email, bio, photo_url, specialties, instagram, tiktok, auth_user_id, api_client_id')
-      .eq('auth_user_id', userId)
-      .eq('api_client_id', apiClientId)
-      .maybeSingle();
 
-    if (error) {
-      console.error('[AuthContext] coaches lookup error:', error);
+    // Run both queries in parallel — coach row + org_admin role check
+    const [coachRes, roleRes] = await Promise.all([
+      supabase
+        .from('coaches')
+        .select('id, name, email, bio, photo_url, specialties, instagram, tiktok, auth_user_id, api_client_id')
+        .eq('auth_user_id', userId)
+        .eq('api_client_id', apiClientId)
+        .maybeSingle(),
+      supabase
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', userId)
+        .eq('role', 'organisation_admin')
+        .maybeSingle(),
+    ]);
+
+    if (coachRes.error) {
+      console.error('[AuthContext] coaches lookup error:', coachRes.error);
       setCoachStatus('not_setup');
       return;
     }
 
-    if (data) {
-      setCoachRow(data as CoachRow);
+    if (coachRes.data) {
+      setCoachRow(coachRes.data as CoachRow);
       setCoachStatus('found');
     } else {
       setCoachStatus('not_setup');
     }
+
+    // Set org admin flag (true if user_roles row exists for organisation_admin)
+    setIsOrgAdmin(!!roleRes.data);
   };
 
   useEffect(() => {
@@ -113,10 +130,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut();
     setCoachRow(null);
     setCoachStatus('loading');
+    setIsOrgAdmin(false);
   };
 
   return (
-    <AuthContext.Provider value={{ session, user, coachRow, coachStatus, authLoading, signOut }}>
+    <AuthContext.Provider value={{ session, user, coachRow, coachStatus, authLoading, isOrgAdmin, signOut }}>
       {children}
     </AuthContext.Provider>
   );
