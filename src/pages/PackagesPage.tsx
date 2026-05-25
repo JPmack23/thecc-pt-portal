@@ -14,6 +14,56 @@ import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
 import { PortalLayout } from '../components/PortalLayout';
 
+// ── Carousel conflict confirmation modal ───────────────────────────────────────
+// Shown when Tyler tries to feature a package for a PT who already has one featured.
+
+function CarouselConflictModal({
+  existingLabel,
+  newLabel,
+  onConfirm,
+  onCancel,
+  primary,
+}: {
+  existingLabel: string;
+  newLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  primary: string;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-surface rounded-2xl border border-border p-6">
+        <h3 className="text-text font-bold text-base mb-2">Replace featured package?</h3>
+        <p className="text-text-muted text-sm mb-4">
+          This PT already has a featured package on the home carousel:
+        </p>
+        <div className="bg-surface-alt border border-border rounded-xl px-3 py-2 mb-4">
+          <p className="text-text text-sm font-semibold">{existingLabel}</p>
+          <p className="text-text-subtle text-xs mt-0.5">Currently featured</p>
+        </div>
+        <p className="text-text-muted text-sm mb-6">
+          Featuring <strong className="text-text">{newLabel}</strong> will remove the previous one from the carousel.
+        </p>
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 py-2.5 rounded-xl text-sm font-medium text-text-muted border border-border hover:text-text transition-colors"
+          >
+            Keep current
+          </button>
+          <button
+            onClick={onConfirm}
+            className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
+            style={{ backgroundColor: primary, color: '#000000' }}
+          >
+            Replace it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface PtOffering {
@@ -129,19 +179,25 @@ function PackageCard({
   primary,
   isFirst,
   isLast,
+  isOrgAdmin,
   onEdit,
   onDelete,
   onMoveUp,
   onMoveDown,
+  onToggleFeatured,
 }: {
   offering: PtOffering;
   primary: string;
   isFirst: boolean;
   isLast: boolean;
+  /** Org admin sees the featured toggle; PTs see a read-only badge */
+  isOrgAdmin: boolean;
   onEdit: (o: PtOffering) => void;
   onDelete: (o: PtOffering) => void;
   onMoveUp: (o: PtOffering) => void;
   onMoveDown: (o: PtOffering) => void;
+  /** Called when org admin flips the featured toggle */
+  onToggleFeatured: (o: PtOffering) => void;
 }) {
   const promoLive = promoIsLive(offering);
 
@@ -220,8 +276,8 @@ function PackageCard({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-col gap-1 flex-shrink-0">
+      {/* Actions + featured toggle */}
+      <div className="flex flex-col gap-1 flex-shrink-0 items-end">
         <button
           onClick={() => onEdit(offering)}
           className="text-text-muted hover:text-text text-xs px-2 py-1 rounded-lg hover:bg-surface-alt transition-colors"
@@ -234,6 +290,38 @@ function PackageCard({
         >
           Remove
         </button>
+
+        {/* Featured on carousel — org_admin toggle / PT read-only badge */}
+        <div className="mt-2 border-t border-border pt-2 w-full">
+          {isOrgAdmin ? (
+            <div className="flex flex-col gap-1">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={offering.featured_on_carousel}
+                onClick={() => onToggleFeatured(offering)}
+                title="Feature on home carousel"
+                className="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none self-end"
+                style={{ backgroundColor: offering.featured_on_carousel ? primary : 'var(--color-border)' }}
+              >
+                <span
+                  className="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200"
+                  style={{ transform: offering.featured_on_carousel ? 'translateX(16px)' : 'translateX(0)' }}
+                />
+              </button>
+              <p className="text-text-subtle text-[10px] text-right leading-tight">
+                {offering.featured_on_carousel ? 'On carousel' : 'Carousel'}
+              </p>
+            </div>
+          ) : offering.featured_on_carousel ? (
+            <span
+              className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border"
+              style={{ color: primary, borderColor: primary + '66' }}
+            >
+              Featured by Tyler
+            </span>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -525,7 +613,7 @@ function ModalField({ label, error, children }: { label: string; error?: string;
 // ── Main page ──────────────────────────────────────────────────────────────
 
 export default function PackagesPage() {
-  const { coachRow } = useAuth();
+  const { coachRow, isOrgAdmin } = useAuth();
   const { tenant } = useTenant();
   const primary = tenant?.primary_color ?? '#FFD600';
 
@@ -536,6 +624,12 @@ export default function PackagesPage() {
   const [editingOffering, setEditingOffering] = useState<PtOffering | null>(null);
   const [deletingOffering, setDeletingOffering] = useState<PtOffering | null>(null);
   const [reordering, setReordering] = useState(false);
+
+  // Carousel conflict modal — shown when Tyler tries to feature a second package for the same PT
+  const [carouselConflict, setCarouselConflict] = useState<{
+    existingOffering: PtOffering;
+    newOffering: PtOffering;
+  } | null>(null);
 
   const fetchOfferings = useCallback(async () => {
     if (!coachRow) return;
@@ -642,6 +736,69 @@ export default function PackagesPage() {
     setReordering(false);
   }
 
+  /**
+   * handleToggleFeatured — called when Tyler clicks the carousel toggle on a package.
+   *
+   * If the target offering is currently featured, just un-feature it (simple PATCH).
+   * If it's currently not featured, check whether this coach already has another
+   * featured offering. If yes → show CarouselConflictModal. If no → PATCH directly.
+   *
+   * The soft warning (not a DB constraint) matches Walter's spec: "Only one package per PT
+   * should be featured. Featuring multiple packages stacks them on the carousel."
+   */
+  async function handleToggleFeatured(offering: PtOffering) {
+    if (!isOrgAdmin) return;
+
+    const newValue = !offering.featured_on_carousel;
+
+    // Un-featuring: simple PATCH, no conflict check needed
+    if (!newValue) {
+      await applyFeaturedToggle(offering, false);
+      return;
+    }
+
+    // Featuring: check for existing featured package for the same coach
+    const existingFeatured = offerings.find(
+      (o) => o.id !== offering.id && o.featured_on_carousel
+    );
+
+    if (existingFeatured) {
+      // Show conflict modal — let Tyler decide
+      setCarouselConflict({ existingOffering: existingFeatured, newOffering: offering });
+    } else {
+      await applyFeaturedToggle(offering, true);
+    }
+  }
+
+  /** Actually PATCH the featured_on_carousel value, optionally clearing the previous one first. */
+  async function applyFeaturedToggle(offering: PtOffering, newValue: boolean, replacingId?: string) {
+    const result1 = await supabase
+      .from('pt_offerings')
+      .update({ featured_on_carousel: newValue, updated_at: new Date().toISOString() })
+      .eq('id', offering.id);
+
+    let result2: { error: any } | null = null;
+    if (replacingId) {
+      result2 = await supabase
+        .from('pt_offerings')
+        .update({ featured_on_carousel: false, updated_at: new Date().toISOString() })
+        .eq('id', replacingId);
+    }
+
+    const hasError = !!result1.error || !!result2?.error;
+
+    if (hasError) {
+      setToast({ message: 'Failed to update carousel status.', type: 'error' });
+    } else {
+      setToast({
+        message: newValue ? 'Package featured on home carousel.' : 'Package removed from carousel.',
+        type: 'success',
+      });
+      fetchOfferings();
+    }
+    setCarouselConflict(null);
+  }
+
   return (
     <PortalLayout>
       {toast && <Toast message={toast.message} type={toast.type} onDismiss={() => setToast(null)} />}
@@ -660,6 +817,22 @@ export default function PackagesPage() {
           offering={deletingOffering}
           onConfirm={handleDelete}
           onCancel={() => setDeletingOffering(null)}
+        />
+      )}
+
+      {carouselConflict && (
+        <CarouselConflictModal
+          existingLabel={carouselConflict.existingOffering.label}
+          newLabel={carouselConflict.newOffering.label}
+          primary={primary}
+          onConfirm={() =>
+            applyFeaturedToggle(
+              carouselConflict.newOffering,
+              true,
+              carouselConflict.existingOffering.id
+            )
+          }
+          onCancel={() => setCarouselConflict(null)}
         />
       )}
 
@@ -685,6 +858,16 @@ export default function PackagesPage() {
           )}
         </div>
 
+        {/* Soft warning — carousel feature limit (org_admin only) */}
+        {isOrgAdmin && offerings.length > 0 && (
+          <div className="mb-4 rounded-xl bg-surface-alt border border-border px-4 py-2.5 flex items-start gap-2">
+            <span className="text-text-muted text-xs mt-0.5">ℹ</span>
+            <p className="text-text-muted text-xs leading-relaxed">
+              <strong className="text-text">Carousel tip:</strong> Only one package per PT should be featured on the home carousel at a time. Use the toggle on each package to control what members see.
+            </p>
+          </div>
+        )}
+
         {/* Reordering indicator */}
         {reordering && (
           <div className="mb-3 flex items-center gap-2 text-text-muted text-xs">
@@ -709,10 +892,12 @@ export default function PackagesPage() {
                 primary={primary}
                 isFirst={idx === 0}
                 isLast={idx === offerings.length - 1}
+                isOrgAdmin={isOrgAdmin}
                 onEdit={(offering) => setEditingOffering(offering)}
                 onDelete={(offering) => setDeletingOffering(offering)}
                 onMoveUp={(offering) => moveOffering(offering, 'up')}
                 onMoveDown={(offering) => moveOffering(offering, 'down')}
+                onToggleFeatured={handleToggleFeatured}
               />
             ))}
             {offerings.length >= MAX_PACKAGES && (

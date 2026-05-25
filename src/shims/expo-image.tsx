@@ -19,12 +19,18 @@ interface ExpoImageProps {
   source: { uri: string } | number;
   style?: React.CSSProperties | Record<string, unknown>;
   contentFit?: 'cover' | 'contain' | 'fill' | 'none' | 'scale-down';
+  /**
+   * contentPosition mirrors expo-image's prop (e.g. 'top', 'center', 'bottom').
+   * Maps directly to CSS objectPosition on the web shim so the hero image
+   * keeps faces visible when the source is taller than the display area.
+   */
+  contentPosition?: string;
   transition?: number;
   alt?: string;
   [key: string]: unknown;
 }
 
-export function Image({ source, style, contentFit = 'cover', alt = '' }: ExpoImageProps) {
+export function Image({ source, style, contentFit = 'cover', contentPosition = 'top', alt = '' }: ExpoImageProps) {
   const uri = typeof source === 'object' && source !== null && 'uri' in source
     ? (source as { uri: string }).uri
     : undefined;
@@ -38,6 +44,7 @@ export function Image({ source, style, contentFit = 'cover', alt = '' }: ExpoIma
       style={{
         ...(style as React.CSSProperties),
         objectFit: contentFit as React.CSSProperties['objectFit'],
+        objectPosition: contentPosition,
       }}
     />
   );

@@ -31,6 +31,7 @@ import InviteExpiredPage from './pages/InviteExpiredPage';
 // VITE_DEV_AUTH_BYPASS=true. Vite tree-shakes it in production builds because
 // the env var is statically false at build time.
 import DevPreviewPage from './pages/DevPreviewPage';
+import AdminRolesPage from './pages/AdminRolesPage';
 
 const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true';
 
@@ -53,7 +54,7 @@ function LoadingScreen() {
 
 function PortalRoutes() {
   const { tenant, loading: tenantLoading, error: tenantError } = useTenant();
-  const { session, coachStatus, authLoading } = useAuth();
+  const { session, coachStatus, authLoading, isOrgAdmin } = useAuth();
 
   // Tenant resolving
   if (tenantLoading) return <LoadingScreen />;
@@ -112,6 +113,17 @@ function PortalRoutes() {
           : coachStatus === 'not_setup'
           ? <NotSetupPage />
           : <PackagesPage />
+      } />
+
+      {/* org_admin only — role management */}
+      <Route path="/admin/roles" element={
+        !session
+          ? <Navigate to="/login" replace />
+          : coachStatus === 'loading'
+          ? <LoadingScreen />
+          : !isOrgAdmin
+          ? <Navigate to="/dashboard" replace />
+          : <AdminRolesPage />
       } />
 
       {/* Default redirect */}

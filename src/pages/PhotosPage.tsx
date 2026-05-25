@@ -74,6 +74,7 @@ export default function PhotosPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [reorderingId, setReorderingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -202,6 +203,41 @@ export default function PhotosPage() {
     [showToast],
   );
 
+  // ── Reorder ────────────────────────────────────────────────────────────
+
+  const movePhoto = useCallback(
+    async (photoId: string, direction: 'up' | 'down') => {
+      const idx = photos.findIndex((p) => p.id === photoId);
+      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= photos.length) return;
+
+      // Optimistic update
+      const updated = [...photos];
+      const tempOrder = updated[idx].display_order;
+      updated[idx] = { ...updated[idx], display_order: updated[swapIdx].display_order };
+      updated[swapIdx] = { ...updated[swapIdx], display_order: tempOrder };
+      updated.sort((a, b) => a.display_order - b.display_order);
+      setPhotos(updated);
+
+      setReorderingId(photoId);
+
+      // Persist both swapped rows
+      await Promise.all([
+        supabase
+          .from('coach_photos')
+          .update({ display_order: updated[swapIdx < idx ? idx : swapIdx].display_order })
+          .eq('id', updated[swapIdx < idx ? idx : swapIdx].id),
+        supabase
+          .from('coach_photos')
+          .update({ display_order: updated[swapIdx < idx ? swapIdx : idx].display_order })
+          .eq('id', updated[swapIdx < idx ? swapIdx : idx].id),
+      ]);
+
+      setReorderingId(null);
+    },
+    [photos],
+  );
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   const canAddMore = photos.length < MAX_PHOTOS;
@@ -283,7 +319,7 @@ export default function PhotosPage() {
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-            {photos.map((photo) => (
+            {photos.map((photo, idx) => (
               <div
                 key={photo.id}
                 className="relative group aspect-square rounded-2xl overflow-hidden border border-border bg-surface"
@@ -294,7 +330,30 @@ export default function PhotosPage() {
                   className="w-full h-full object-cover"
                   loading="lazy"
                 />
-                {/* Delete overlay */}
+
+                {/* Reorder arrows — top-left corner, always visible (no hover needed for mobile) */}
+                <div className="absolute top-2 left-2 flex flex-col gap-1 z-10">
+                  <button
+                    onClick={() => movePhoto(photo.id, 'up')}
+                    disabled={idx === 0 || reorderingId === photo.id}
+                    className="w-6 h-6 flex items-center justify-center rounded-md bg-black/60 text-white text-xs font-bold transition-opacity disabled:opacity-20 disabled:cursor-not-allowed hover:bg-black/80"
+                    aria-label="Move photo up"
+                    title="Move up"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    onClick={() => movePhoto(photo.id, 'down')}
+                    disabled={idx === photos.length - 1 || reorderingId === photo.id}
+                    className="w-6 h-6 flex items-center justify-center rounded-md bg-black/60 text-white text-xs font-bold transition-opacity disabled:opacity-20 disabled:cursor-not-allowed hover:bg-black/80"
+                    aria-label="Move photo down"
+                    title="Move down"
+                  >
+                    ↓
+                  </button>
+                </div>
+
+                {/* Delete overlay — centre, hover/tap */}
                 <button
                   onClick={() => handleDelete(photo)}
                   disabled={deletingId === photo.id}

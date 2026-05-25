@@ -76,12 +76,21 @@ export interface PreviewCoachData {
   specialties: string[] | null;
   instagram: string | null;
   tiktok: string | null;
-  // Role flags
+  // Legacy role flags — kept for backwards compat; new UI uses selectedRoleLabels
   is_personal_trainer?: boolean | null;
   is_nutritionist?: boolean | null;
+  /**
+   * DB-managed role labels selected via the multi-select chips UI.
+   * When present, passed through to CoachProfileView.roles[] which
+   * takes priority over the legacy boolean flags for the title line.
+   */
+  selectedRoleLabels?: string[] | null;
   // Location
   regions?: string[] | null;
   online_remote?: boolean | null;
+  // Qualifications & achievements (stored as ' · '-delimited string)
+  qualifications?: string | null;
+  achievements?: string | null;
   // Members deal — members_deal_active gates whether the card shows
   members_deal_active?: boolean | null;
   members_deal?: string | null;
@@ -120,8 +129,8 @@ function formDataToCoachProfileData(formData: PreviewCoachData): CoachProfileDat
     is_personal_trainer: formData.is_personal_trainer ?? true,
     is_nutritionist: formData.is_nutritionist ?? false,
     specialties: formData.specialties,
-    qualifications: null,
-    achievements: null,
+    qualifications: formData.qualifications ?? null,
+    achievements: formData.achievements ?? null,
     members_deal: showDeal ? (formData.members_deal ?? null) : null,
     members_deal_active: formData.members_deal_active ?? false,
     coupon_code: showDeal ? (formData.coupon_code ?? null) : null,
@@ -136,6 +145,11 @@ function formDataToCoachProfileData(formData: PreviewCoachData): CoachProfileDat
     youtube: null,
     gallery_photos: formData.gallery_photos ?? null,
     packages: formData.packages ?? null,
+    // DB-managed roles — when provided, CoachProfileView uses these for the title
+    // line instead of the legacy boolean flags.
+    roles: (formData.selectedRoleLabels ?? []).length > 0
+      ? (formData.selectedRoleLabels ?? null)
+      : null,
   };
 }
 
