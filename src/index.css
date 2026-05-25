@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS custom properties for tenant theming — set by TenantContext on mount */
+:root {
+  --color-primary: #FFD600;
+  --color-primary-fg: #000000;
+  --color-secondary: #FFFFFF;
+  --color-canvas: #000000;
+  --color-surface: #1A1A1A;
+  --color-surface-alt: #111111;
+  --color-border: #2A2A2A;
+  --color-text: #FFFFFF;
+  --color-text-muted: #AAAAAA;
+  --color-text-subtle: #777777;
+}
+
+/* Base resets */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background-color: var(--color-canvas);
+}
+
+body {
+  font-family: Inter, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--color-text);
+}
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
