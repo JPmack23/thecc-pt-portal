@@ -207,8 +207,9 @@ function SortablePhotoTile({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    // Lift the dragged tile above neighbours
-    zIndex: isDragging ? 10 : undefined,
+    // Lift the dragged tile above neighbours AND above the arrow-button cluster
+    // (which uses z-10) so the dragged tile is unambiguously on top.
+    zIndex: isDragging ? 50 : undefined,
     // Scale up + deepen shadow while dragging
     ...(isDragging && {
       transform: CSS.Transform.toString(transform)
@@ -263,24 +264,23 @@ function SortablePhotoTile({
         </button>
       </div>
 
-      {/* ── Delete overlay — centre, hover/tap, outside drag listeners ── */}
+      {/* ── Delete: small top-right button — pointer-events scoped to the
+              button only so the rest of the tile stays a drag handle.
+              Visual dim overlay is a sibling div with pointer-events:none. ── */}
+      <div
+        className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+      />
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         disabled={deletingId === photo.id}
-        className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100"
-        style={{
-          // Don't let the delete overlay steal the grab cursor from the img
-          cursor: deletingId === photo.id ? 'default' : undefined,
-        }}
+        className="absolute top-2 right-2 w-8 h-8 flex items-center justify-center rounded-md bg-black/70 text-white opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100 hover:bg-red-600/90 z-20"
         aria-label="Delete photo"
+        title="Remove photo"
       >
         {deletingId === photo.id ? (
-          <div className="w-6 h-6 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+          <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
         ) : (
-          <div className="flex flex-col items-center gap-1">
-            <span className="text-2xl">🗑️</span>
-            <span className="text-white text-xs font-medium">Remove</span>
-          </div>
+          <span className="text-sm">🗑️</span>
         )}
       </button>
     </div>
@@ -724,6 +724,11 @@ export default function PhotosPage() {
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
+      // Block reorder during an active bulk upload — racing display_order
+      // writes against insert-time display_order = baseOrder + index would
+      // create duplicate or stale ordering values.
+      if (uploading) return;
+
       const { active, over } = event;
       if (!over || active.id === over.id) return;
 
@@ -761,7 +766,7 @@ export default function PhotosPage() {
         await loadPhotos();
       }
     },
-    [photos, showToast, loadPhotos],
+    [photos, uploading, showToast, loadPhotos],
   );
 
   // ── Preview data — gallery-only (the /photos editor is photos-only,
