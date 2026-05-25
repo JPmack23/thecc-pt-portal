@@ -258,9 +258,18 @@ const packagesStyles = StyleSheet.create({
   },
 });
 
-// ── GalleryRow sub-component ───────────────────────────────────────────────
+// ── GalleryGrid sub-component ──────────────────────────────────────────────
+//
+// Instagram-style 3-column square tile grid.
+// Replaces the previous GalleryRow horizontal scroll strip (v0.4.3).
+//
+// Tile size: Math.floor((screenWidth - 2) / 3)
+//   The "2" = two 1px gaps between 3 columns.
+//   375pt → 124pt tiles. 430pt → 142pt tiles. SE (320pt) → 106pt. All fine.
+//
+// Lightbox (Modal + FlatList) is unchanged from the original GalleryRow.
 
-function GalleryRow({
+function GalleryGrid({
   photos,
   colors,
   screenWidth,
@@ -270,30 +279,27 @@ function GalleryRow({
   screenWidth: number;
 }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const TILE_SIZE = 280;
+  const TILE = Math.floor((screenWidth - 2) / 3);
 
   return (
     <View style={galleryStyles.wrap}>
       <Text style={[typography.h4, { color: colors.text, marginBottom: spacing.md, paddingHorizontal: spacing.lg }]}>
         Gallery
       </Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: 12 }}
-        style={{ marginBottom: spacing.lg }}
-      >
+
+      {/* 3-column square tile grid */}
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 1 }}>
         {photos.map((photo, idx) => (
           <Pressable key={photo.id} onPress={() => setLightboxIndex(idx)}>
             <Image
               source={{ uri: photo.public_url }}
-              style={{ width: TILE_SIZE, height: TILE_SIZE, borderRadius: radius.lg }}
+              style={{ width: TILE, height: TILE }}
               contentFit="cover"
               transition={200}
             />
           </Pressable>
         ))}
-      </ScrollView>
+      </View>
 
       {/* Fullscreen lightbox */}
       <Modal
@@ -595,7 +601,7 @@ export function CoachProfileView({
 
       {/* ── Gallery ──────────────────────────────────────────────── */}
       {coach.gallery_photos && coach.gallery_photos.length > 0 && (
-        <GalleryRow photos={coach.gallery_photos} colors={colors} screenWidth={screenWidth} />
+        <GalleryGrid photos={coach.gallery_photos} colors={colors} screenWidth={screenWidth} />
       )}
 
       {/* ── Qualifications ─────────────────────────────────────────── */}
