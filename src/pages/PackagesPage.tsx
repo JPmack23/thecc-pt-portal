@@ -657,6 +657,22 @@ export default function PackagesPage() {
 
   useEffect(() => { fetchOfferings(); }, [fetchOfferings]);
 
+  // Coach gallery photos — fetched read-only for the preview so /packages
+  // shows the SAME full profile chrome as /profile (gallery section included).
+  const [coachGalleryPhotos, setCoachGalleryPhotos] = useState<Array<{ id: string; public_url: string }>>([]);
+  useEffect(() => {
+    if (!coachRow?.id) return;
+    supabase
+      .from('coach_photos')
+      .select('id, public_url')
+      .eq('coach_id', coachRow.id)
+      .order('display_order', { ascending: true })
+      .order('created_at', { ascending: true })
+      .then(({ data }) => {
+        if (data) setCoachGalleryPhotos(data as Array<{ id: string; public_url: string }>);
+      });
+  }, [coachRow?.id]);
+
   async function handleSaveOffering(form: OfferingFormState, offeringId: string | null) {
     if (!coachRow || !tenant) return;
 
@@ -938,6 +954,9 @@ export default function PackagesPage() {
                   featured: o.featured_on_carousel,
                 }),
               ),
+              // Pass saved gallery photos too so the preview shows the SAME
+              // full profile as /profile — only packages section is live here.
+              gallery_photos: coachGalleryPhotos,
             })}
           />
         </div>

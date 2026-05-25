@@ -61,7 +61,11 @@ import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
 import { PortalLayout } from '../components/PortalLayout';
 import { GalleryPhotoCropModal } from '../components/GalleryPhotoCropModal';
-import { PreviewPanel, buildPreviewDataFromCoachRow } from '../components/preview/CoachProfilePreview';
+import {
+  PreviewPanel,
+  buildPreviewDataFromCoachRow,
+  type PreviewPackage,
+} from '../components/preview/CoachProfilePreview';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -307,6 +311,35 @@ export default function PhotosPage() {
   useEffect(() => {
     loadPhotos();
   }, [loadPhotos]);
+
+  // Coach offerings — fetched read-only for the preview so it shows the
+  // full profile chrome (including packages section) matching /profile.
+  const [coachOfferings, setCoachOfferings] = useState<PreviewPackage[]>([]);
+  useEffect(() => {
+    if (!coachRow?.id) return;
+    supabase
+      .from('pt_offerings')
+      .select('id, label, price_nzd, duration_label, promo_label, promo_active, promo_starts_at, promo_ends_at, featured_on_carousel')
+      .eq('coach_id', coachRow.id)
+      .eq('is_active', true)
+      .order('display_order', { ascending: true })
+      .then(({ data }) => {
+        if (!data) return;
+        setCoachOfferings(
+          data.map((o: any) => ({
+            id: o.id,
+            title: o.label,
+            price: o.price_nzd,
+            duration: o.duration_label ?? undefined,
+            promo_label: o.promo_label ?? undefined,
+            promo_active: o.promo_active ?? false,
+            promo_starts_at: o.promo_starts_at ?? undefined,
+            promo_ends_at: o.promo_ends_at ?? undefined,
+            featured: o.featured_on_carousel ?? false,
+          })),
+        );
+      });
+  }, [coachRow?.id]);
 
   // ── Single-file path: pick → open crop modal ──────────────────────────
   // This is completely unchanged from v0.4.3.
@@ -705,6 +738,9 @@ export default function PhotosPage() {
 
   const previewData = buildPreviewDataFromCoachRow(coachRow, {
     gallery_photos: photos.map((p) => ({ id: p.id, public_url: p.public_url })),
+    // Pass saved packages too so the preview shows the SAME full profile
+    // as /profile — only the gallery section reflects live edits on this page.
+    packages: coachOfferings,
   });
 
   // ── Render ─────────────────────────────────────────────────────────────
