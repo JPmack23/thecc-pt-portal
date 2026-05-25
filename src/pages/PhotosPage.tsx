@@ -176,23 +176,13 @@ async function autoCropToBlob(file: File): Promise<Blob> {
 
 interface SortablePhotoTileProps {
   photo: CoachPhoto;
-  idx: number;
-  total: number;
-  reorderingId: string | null;
   deletingId: string | null;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
   onDelete: () => void;
 }
 
 function SortablePhotoTile({
   photo,
-  idx,
-  total,
-  reorderingId,
   deletingId,
-  onMoveUp,
-  onMoveDown,
   onDelete,
 }: SortablePhotoTileProps) {
   const {
@@ -240,30 +230,6 @@ function SortablePhotoTile({
         }}
       />
 
-      {/* ── Reorder arrows — top-left, outside drag listeners ── */}
-      <div className="absolute top-2 left-2 flex flex-col gap-1 z-10">
-        <button
-          onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
-          disabled={idx === 0 || reorderingId === photo.id}
-          className="w-8 h-8 flex flex-col items-center justify-center rounded-md bg-black/60 text-white text-xs font-bold transition-opacity disabled:opacity-40 disabled:cursor-not-allowed hover:bg-black/80"
-          aria-label="Move up"
-          title="Move up"
-        >
-          <span className="text-sm leading-none">↑</span>
-          <span className="text-[9px] leading-none mt-0.5 opacity-80">Up</span>
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
-          disabled={idx === total - 1 || reorderingId === photo.id}
-          className="w-8 h-8 flex flex-col items-center justify-center rounded-md bg-black/60 text-white text-xs font-bold transition-opacity disabled:opacity-40 disabled:cursor-not-allowed hover:bg-black/80"
-          aria-label="Move down"
-          title="Move down"
-        >
-          <span className="text-sm leading-none">↓</span>
-          <span className="text-[9px] leading-none mt-0.5 opacity-80">Dn</span>
-        </button>
-      </div>
-
       {/* ── Delete: small top-right button — pointer-events scoped to the
               button only so the rest of the tile stays a drag handle.
               Visual dim overlay is a sibling div with pointer-events:none. ── */}
@@ -296,7 +262,6 @@ export default function PhotosPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [reorderingId, setReorderingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Crop modal state (single-file path — unchanged)
@@ -674,41 +639,6 @@ export default function PhotosPage() {
     [showToast],
   );
 
-  // ── Reorder ────────────────────────────────────────────────────────────
-
-  const movePhoto = useCallback(
-    async (photoId: string, direction: 'up' | 'down') => {
-      const idx = photos.findIndex((p) => p.id === photoId);
-      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= photos.length) return;
-
-      // Optimistic update
-      const updated = [...photos];
-      const tempOrder = updated[idx].display_order;
-      updated[idx] = { ...updated[idx], display_order: updated[swapIdx].display_order };
-      updated[swapIdx] = { ...updated[swapIdx], display_order: tempOrder };
-      updated.sort((a, b) => a.display_order - b.display_order);
-      setPhotos(updated);
-
-      setReorderingId(photoId);
-
-      // Persist both swapped rows
-      await Promise.all([
-        supabase
-          .from('coach_photos')
-          .update({ display_order: updated[swapIdx < idx ? idx : swapIdx].display_order })
-          .eq('id', updated[swapIdx < idx ? idx : swapIdx].id),
-        supabase
-          .from('coach_photos')
-          .update({ display_order: updated[swapIdx < idx ? swapIdx : idx].display_order })
-          .eq('id', updated[swapIdx < idx ? swapIdx : idx].id),
-      ]);
-
-      setReorderingId(null);
-    },
-    [photos],
-  );
-
   // ── Drag-to-reorder (dnd-kit) ──────────────────────────────────────────
 
   const sensors = useSensors(
@@ -873,10 +803,17 @@ export default function PhotosPage() {
               />
             </div>
 
-            {/* Photo count */}
-            <p className="text-text-subtle text-xs mb-5">
-              {photos.length} / {MAX_PHOTOS} photos used
-            </p>
+            {/* Photo count + drag instruction */}
+            <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
+              <p className="text-text-subtle text-xs">
+                {photos.length} / {MAX_PHOTOS} photos used
+              </p>
+              {photos.length >= 2 && (
+                <p className="text-text-subtle text-xs italic">
+                  ↔ Drag photos to reorder them
+                </p>
+              )}
+            </div>
 
             {/* Grid */}
             {loading ? (
@@ -949,16 +886,11 @@ export default function PhotosPage() {
                   strategy={rectSortingStrategy}
                 >
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                    {photos.map((photo, idx) => (
+                    {photos.map((photo) => (
                       <SortablePhotoTile
                         key={photo.id}
                         photo={photo}
-                        idx={idx}
-                        total={photos.length}
-                        reorderingId={reorderingId}
                         deletingId={deletingId}
-                        onMoveUp={() => movePhoto(photo.id, 'up')}
-                        onMoveDown={() => movePhoto(photo.id, 'down')}
                         onDelete={() => handleDelete(photo)}
                       />
                     ))}
