@@ -26,9 +26,35 @@
  *   - Hidden multi-file <input> via multiFileInputRef
  *   - bulkProgress state drives "Uploading X/Y…" label on the primary button
  *   - Single-file "Add photo" → crop modal flow completely unchanged
+ *
+ * Updated v0.4.5 (2026-05-26):
+ *   - Drag-to-reorder via @dnd-kit/core + @dnd-kit/sortable (primary interaction)
+ *   - Up/down arrow buttons retained as touch/keyboard fallback
+ *   - Listeners attached to image element only — arrows and delete button cannot
+ *     accidentally start a drag
+ *   - Optimistic UI reorder with DB batch UPDATE; reverts to DB state on any failure
+ *   - Visual feedback: scale(1.05) + shadow on the dragged tile; smooth slide for neighbours
+ *   - cursor: grab on tile image, cursor: grabbing while dragging
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  rectSortingStrategy,
+  useSortable,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { type AvatarEditorRef } from 'react-avatar-editor';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
@@ -137,6 +163,128 @@ async function autoCropToBlob(file: File): Promise<Blob> {
       );
     });
   }
+}
+
+// ── SortablePhotoTile ──────────────────────────────────────────────────────
+//
+// Each tile in the photo grid. Uses useSortable to participate in dnd-kit's
+// drag-to-reorder.
+//
+// IMPORTANT: drag listeners are applied to the <img> element only.
+// The arrow buttons and delete button sit OUTSIDE the drag-handle area so
+// clicking them never accidentally starts a drag.
+
+interface SortablePhotoTileProps {
+  photo: CoachPhoto;
+  idx: number;
+  total: number;
+  reorderingId: string | null;
+  deletingId: string | null;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onDelete: () => void;
+}
+
+function SortablePhotoTile({
+  photo,
+  idx,
+  total,
+  reorderingId,
+  deletingId,
+  onMoveUp,
+  onMoveDown,
+  onDelete,
+}: SortablePhotoTileProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: photo.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    // Lift the dragged tile above neighbours
+    zIndex: isDragging ? 10 : undefined,
+    // Scale up + deepen shadow while dragging
+    ...(isDragging && {
+      transform: CSS.Transform.toString(transform)
+        ? CSS.Transform.toString(transform) + ' scale(1.05)'
+        : 'scale(1.05)',
+      boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+    }),
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="relative group aspect-square rounded-2xl overflow-hidden border border-border bg-surface"
+    >
+      {/* ── Drag handle: the image itself ── */}
+      {/* listeners spread here — NOT on the whole tile or the button layer */}
+      <img
+        {...attributes}
+        {...listeners}
+        src={photo.public_url}
+        alt="Gallery photo"
+        className="w-full h-full object-cover select-none"
+        loading="lazy"
+        draggable={false}
+        style={{
+          cursor: isDragging ? 'grabbing' : 'grab',
+        }}
+      />
+
+      {/* ── Reorder arrows — top-left, outside drag listeners ── */}
+      <div className="absolute top-2 left-2 flex flex-col gap-1 z-10">
+        <button
+          onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
+          disabled={idx === 0 || reorderingId === photo.id}
+          className="w-8 h-8 flex flex-col items-center justify-center rounded-md bg-black/60 text-white text-xs font-bold transition-opacity disabled:opacity-40 disabled:cursor-not-allowed hover:bg-black/80"
+          aria-label="Move up"
+          title="Move up"
+        >
+          <span className="text-sm leading-none">↑</span>
+          <span className="text-[9px] leading-none mt-0.5 opacity-80">Up</span>
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
+          disabled={idx === total - 1 || reorderingId === photo.id}
+          className="w-8 h-8 flex flex-col items-center justify-center rounded-md bg-black/60 text-white text-xs font-bold transition-opacity disabled:opacity-40 disabled:cursor-not-allowed hover:bg-black/80"
+          aria-label="Move down"
+          title="Move down"
+        >
+          <span className="text-sm leading-none">↓</span>
+          <span className="text-[9px] leading-none mt-0.5 opacity-80">Dn</span>
+        </button>
+      </div>
+
+      {/* ── Delete overlay — centre, hover/tap, outside drag listeners ── */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        disabled={deletingId === photo.id}
+        className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100"
+        style={{
+          // Don't let the delete overlay steal the grab cursor from the img
+          cursor: deletingId === photo.id ? 'default' : undefined,
+        }}
+        aria-label="Delete photo"
+      >
+        {deletingId === photo.id ? (
+          <div className="w-6 h-6 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+        ) : (
+          <div className="flex flex-col items-center gap-1">
+            <span className="text-2xl">🗑️</span>
+            <span className="text-white text-xs font-medium">Remove</span>
+          </div>
+        )}
+      </button>
+    </div>
+  );
 }
 
 export default function PhotosPage() {
@@ -561,6 +709,61 @@ export default function PhotosPage() {
     [photos],
   );
 
+  // ── Drag-to-reorder (dnd-kit) ──────────────────────────────────────────
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      // Require the pointer to move 4px before a drag starts.
+      // This prevents accidental drags when tapping arrow / delete buttons.
+      activationConstraint: { distance: 4 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = photos.findIndex((p) => p.id === active.id);
+      const newIndex = photos.findIndex((p) => p.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      // Optimistic UI reorder
+      const reordered = arrayMove(photos, oldIndex, newIndex);
+      setPhotos(reordered);
+
+      // Compute the affected range — only rows whose display_order actually changed
+      const start = Math.min(oldIndex, newIndex);
+      const end = Math.max(oldIndex, newIndex);
+
+      const updates = reordered.slice(start, end + 1).map((p, i) => ({
+        id: p.id,
+        display_order: start + i,
+      }));
+
+      // Run all updates in parallel (N concurrent UPDATEs, max 10)
+      const results = await Promise.allSettled(
+        updates.map((u) =>
+          supabase
+            .from('coach_photos')
+            .update({ display_order: u.display_order })
+            .eq('id', u.id),
+        ),
+      );
+
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed > 0) {
+        // Revert optimistic UI and reload authoritative state from DB
+        showToast('Reorder failed — refreshing photos', 'error');
+        await loadPhotos();
+      }
+    },
+    [photos, showToast, loadPhotos],
+  );
+
   // ── Preview data — gallery-only (the /photos editor is photos-only,
   //    so the preview pane matches that scope; no profile fields rendered) ──
 
@@ -731,95 +934,65 @@ export default function PhotosPage() {
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                {photos.map((photo, idx) => (
-                  <div
-                    key={photo.id}
-                    className="relative group aspect-square rounded-2xl overflow-hidden border border-border bg-surface"
-                  >
-                    <img
-                      src={photo.public_url}
-                      alt="Gallery photo"
-                      className="w-full h-full object-cover"
-                      loading="lazy"
-                    />
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={photos.map((p) => p.id)}
+                  strategy={rectSortingStrategy}
+                >
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    {photos.map((photo, idx) => (
+                      <SortablePhotoTile
+                        key={photo.id}
+                        photo={photo}
+                        idx={idx}
+                        total={photos.length}
+                        reorderingId={reorderingId}
+                        deletingId={deletingId}
+                        onMoveUp={() => movePhoto(photo.id, 'up')}
+                        onMoveDown={() => movePhoto(photo.id, 'down')}
+                        onDelete={() => handleDelete(photo)}
+                      />
+                    ))}
 
-                    {/* Reorder arrows — top-left corner, always visible (no hover needed for mobile) */}
-                    <div className="absolute top-2 left-2 flex flex-col gap-1 z-10">
+                    {/* + Add slot — shown when under limit; also serves as dropzone */}
+                    {canAddMore && (
                       <button
-                        onClick={() => movePhoto(photo.id, 'up')}
-                        disabled={idx === 0 || reorderingId === photo.id}
-                        className="w-8 h-8 flex flex-col items-center justify-center rounded-md bg-black/60 text-white text-xs font-bold transition-opacity disabled:opacity-40 disabled:cursor-not-allowed hover:bg-black/80"
-                        aria-label="Up"
-                        title="Move up"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading}
+                        className="aspect-square rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-all disabled:opacity-40"
+                        style={{
+                          borderColor: isDragging ? primary : undefined,
+                          backgroundColor: isDragging ? primary + '10' : undefined,
+                        }}
+                        onDragEnter={handleDragEnter}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
                       >
-                        <span className="text-sm leading-none">↑</span>
-                        <span className="text-[9px] leading-none mt-0.5 opacity-80">Up</span>
+                        {isDragging ? (
+                          <span className="text-sm font-semibold" style={{ color: primary }}>
+                            Drop photos to upload
+                          </span>
+                        ) : (
+                          <>
+                            <span
+                              className="text-3xl font-bold"
+                              style={{ color: primary }}
+                            >
+                              +
+                            </span>
+                            <span className="text-text-muted text-xs">Add photo</span>
+                          </>
+                        )}
                       </button>
-                      <button
-                        onClick={() => movePhoto(photo.id, 'down')}
-                        disabled={idx === photos.length - 1 || reorderingId === photo.id}
-                        className="w-8 h-8 flex flex-col items-center justify-center rounded-md bg-black/60 text-white text-xs font-bold transition-opacity disabled:opacity-40 disabled:cursor-not-allowed hover:bg-black/80"
-                        aria-label="Down"
-                        title="Move down"
-                      >
-                        <span className="text-sm leading-none">↓</span>
-                        <span className="text-[9px] leading-none mt-0.5 opacity-80">Dn</span>
-                      </button>
-                    </div>
-
-                    {/* Delete overlay — centre, hover/tap */}
-                    <button
-                      onClick={() => handleDelete(photo)}
-                      disabled={deletingId === photo.id}
-                      className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100"
-                      aria-label="Delete photo"
-                    >
-                      {deletingId === photo.id ? (
-                        <div className="w-6 h-6 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                      ) : (
-                        <div className="flex flex-col items-center gap-1">
-                          <span className="text-2xl">🗑️</span>
-                          <span className="text-white text-xs font-medium">Remove</span>
-                        </div>
-                      )}
-                    </button>
-                  </div>
-                ))}
-
-                {/* + Add slot — shown when under limit; also serves as dropzone */}
-                {canAddMore && (
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading}
-                    className="aspect-square rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-all disabled:opacity-40"
-                    style={{
-                      borderColor: isDragging ? primary : undefined,
-                      backgroundColor: isDragging ? primary + '10' : undefined,
-                    }}
-                    onDragEnter={handleDragEnter}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                  >
-                    {isDragging ? (
-                      <span className="text-sm font-semibold" style={{ color: primary }}>
-                        Drop photos to upload
-                      </span>
-                    ) : (
-                      <>
-                        <span
-                          className="text-3xl font-bold"
-                          style={{ color: primary }}
-                        >
-                          +
-                        </span>
-                        <span className="text-text-muted text-xs">Add photo</span>
-                      </>
                     )}
-                  </button>
-                )}
-              </div>
+                  </div>
+                </SortableContext>
+              </DndContext>
             )}
           </div>
 
