@@ -121,6 +121,8 @@ export interface CoachProfileViewProps {
   startingPrice?: number | null;
   /** Callback for the Book CTA — only relevant in full-screen native context */
   onBookPress?: () => void;
+  /** Callback when a package tile is tapped — navigates to BookingScreen with that package pre-selected */
+  onPackagePress?: (pkg: CoachPackage) => void;
   /** Scroll container width — defaults to device screen width */
   containerWidth?: number;
 }
@@ -159,7 +161,15 @@ function isPromoInRange(starts?: string | null, ends?: string | null): boolean {
 
 // ── PackagesList sub-component ─────────────────────────────────────────────
 
-function PackagesList({ packages, colors }: { packages: CoachPackage[]; colors: CoachThemeColors }) {
+function PackagesList({
+  packages,
+  colors,
+  onPackagePress,
+}: {
+  packages: CoachPackage[];
+  colors: CoachThemeColors;
+  onPackagePress?: (pkg: CoachPackage) => void;
+}) {
   return (
     <View style={[packagesStyles.wrap, { borderTopColor: colors.border }]}>
       <Text style={[typography.h4, { color: colors.text, marginBottom: spacing.md, paddingHorizontal: spacing.lg }]}>
@@ -167,10 +177,15 @@ function PackagesList({ packages, colors }: { packages: CoachPackage[]; colors: 
       </Text>
       {packages.map((pkg) => {
         const promoOn = pkg.promo_active && isPromoInRange(pkg.promo_starts_at, pkg.promo_ends_at);
+        const Card: any = onPackagePress ? Pressable : View;
         return (
-          <View
+          <Card
             key={pkg.id}
-            style={[packagesStyles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            onPress={onPackagePress ? () => onPackagePress(pkg) : undefined}
+            style={({ pressed }: { pressed?: boolean }) => [
+              packagesStyles.card,
+              { backgroundColor: colors.surface, borderColor: colors.border, opacity: pressed ? 0.7 : 1 },
+            ]}
           >
             {/* Promo badge */}
             {promoOn && pkg.promo_label && (
@@ -203,7 +218,7 @@ function PackagesList({ packages, colors }: { packages: CoachPackage[]; colors: 
                 {pkg.duration}
               </Text>
             )}
-          </View>
+          </Card>
         );
       })}
     </View>
@@ -388,6 +403,7 @@ export function CoachProfileView({
   stats,
   startingPrice,
   onBookPress,
+  onPackagePress,
   containerWidth,
 }: CoachProfileViewProps) {
   const screenWidth = containerWidth ?? Dimensions.get('window').width;
@@ -564,7 +580,7 @@ export function CoachProfileView({
         <View
           onLayout={(e) => { packagesOffsetY.current = e.nativeEvent.layout.y; }}
         >
-          <PackagesList packages={coach.packages} colors={colors} />
+          <PackagesList packages={coach.packages} colors={colors} onPackagePress={onPackagePress} />
         </View>
       )}
 
