@@ -13,9 +13,15 @@
  *   - Photo upload creates a local object URL for the preview immediately (EC-15)
  *   - On save: PATCH coaches row via Supabase JS client (RLS: auth_user_id match)
  *   - Toast on success / error
+ *
+ * My Photos section (bottom of page):
+ *   - Up to 10 additional gallery photos per coach
+ *   - Uploads to branding-assets bucket at coach-photos/{coach_id}/{filename}
+ *   - Stored in coach_photos table (RLS: auth_user_id match via coaches join)
+ *   - Delete removes from storage + table
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
@@ -27,11 +33,20 @@ import { PortalLayout } from '../components/PortalLayout';
 
 const MAX_BIO = 500;
 const MAX_SPECIALTIES = 5;
+const MAX_GALLERY_PHOTOS = 10;
+const GALLERY_BUCKET = 'branding-assets';
 const MAX_SPECIALTY_LEN = 30;
 const IG_REGEX = /^[a-zA-Z0-9._]{1,30}$/;
 const TT_REGEX = /^[a-zA-Z0-9._]{1,24}$/;
 
 // ── Types ──────────────────────────────────────────────────────────────────
+
+interface CoachPhoto {
+  id: string;
+  storage_path: string;
+  public_url: string;
+  created_at: string;
+}
 
 interface FormState {
   name: string;
@@ -80,6 +95,12 @@ export default function ProfilePage() {
   const primary = tenant?.primary_color ?? '#FFD600';
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+  const [galleryPhotos, setGalleryPhotos] = useState<CoachPhoto[]>([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [galleryUploading, setGalleryUploading] = useState(false);
+  const [galleryError, setGalleryError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>({
     name: '',
     bio: '',
@@ -280,6 +301,126 @@ export default function ProfilePage() {
       setToast({ message: 'Profile saved successfully.', type: 'success' });
     } finally {
       setSaving(false);
+    }
+  }
+
+  // ── Gallery: fetch on mount / when coachRow loads ─────────────────────────
+
+  const fetchGalleryPhotos = useCallback(async (coachId: string) => {
+    setGalleryLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('coach_photos')
+        .select('id, storage_path, public_url, created_at')
+        .eq('coach_id', coachId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('[ProfilePage] gallery fetch error:', error);
+        setGalleryError('Could not load gallery photos.');
+      } else {
+        setGalleryPhotos(data ?? []);
+      }
+    } finally {
+      setGalleryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (coachRow?.id) fetchGalleryPhotos(coachRow.id);
+  }, [coachRow?.id, fetchGalleryPhotos]);
+
+  // ── Gallery: upload ────────────────────────────────────────────────────────
+
+  async function handleGalleryUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // Reset input so the same file can be re-selected after deletion
+    e.target.value = '';
+    if (!file || !coachRow) return;
+
+    if (galleryPhotos.length >= MAX_GALLERY_PHOTOS) {
+      setGalleryError(`Maximum ${MAX_GALLERY_PHOTOS} photos reached.`);
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setGalleryError('Photo must be under 5MB.');
+      return;
+    }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setGalleryError('Only JPEG, PNG, or WebP photos are supported.');
+      return;
+    }
+
+    setGalleryError(null);
+    setGalleryUploading(true);
+    try {
+      const ext = file.name.split('.').pop() ?? 'jpg';
+      const filename = `${Date.now()}.${ext}`;
+      const storagePath = `coach-photos/${coachRow.id}/${filename}`;
+
+      const { error: uploadErr } = await supabase.storage
+        .from(GALLERY_BUCKET)
+        .upload(storagePath, file, { upsert: false, contentType: file.type });
+
+      if (uploadErr) {
+        console.error('[ProfilePage] gallery upload error:', uploadErr);
+        setGalleryError('Upload failed. Please try again.');
+        return;
+      }
+
+      const { data: urlData } = supabase.storage
+        .from(GALLERY_BUCKET)
+        .getPublicUrl(storagePath);
+
+      const { data: row, error: insertErr } = await supabase
+        .from('coach_photos')
+        .insert({ coach_id: coachRow.id, storage_path: storagePath, public_url: urlData.publicUrl })
+        .select('id, storage_path, public_url, created_at')
+        .single();
+
+      if (insertErr || !row) {
+        console.error('[ProfilePage] gallery insert error:', insertErr);
+        // Clean up orphaned storage object
+        await supabase.storage.from(GALLERY_BUCKET).remove([storagePath]);
+        setGalleryError('Failed to save photo. Please try again.');
+        return;
+      }
+
+      setGalleryPhotos((prev) => [...prev, row]);
+    } finally {
+      setGalleryUploading(false);
+    }
+  }
+
+  // ── Gallery: delete ────────────────────────────────────────────────────────
+
+  async function handleGalleryDelete(photo: CoachPhoto) {
+    setDeletingId(photo.id);
+    try {
+      // Remove from storage first
+      const { error: storageErr } = await supabase.storage
+        .from(GALLERY_BUCKET)
+        .remove([photo.storage_path]);
+
+      if (storageErr) {
+        console.error('[ProfilePage] gallery storage delete error:', storageErr);
+        // Proceed to delete the DB row regardless — orphaned files are recoverable
+      }
+
+      const { error: dbErr } = await supabase
+        .from('coach_photos')
+        .delete()
+        .eq('id', photo.id);
+
+      if (dbErr) {
+        console.error('[ProfilePage] gallery db delete error:', dbErr);
+        setGalleryError('Failed to delete photo. Please try again.');
+        return;
+      }
+
+      setGalleryPhotos((prev) => prev.filter((p) => p.id !== photo.id));
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -501,6 +642,114 @@ export default function ProfilePage() {
 
           {/* ── Right: live preview panel ───────────────────────────────── */}
           <PreviewPanel formData={previewData} />
+        </div>
+
+        {/* ── My Photos section ─────────────────────────────────────────── */}
+        <div className="mt-10">
+          <div className="mb-4">
+            <h2 className="text-text text-xl font-bold">My Photos</h2>
+            <p className="text-text-muted text-sm mt-1">
+              Add up to {MAX_GALLERY_PHOTOS} photos to your profile gallery. JPEG, PNG or WebP · max 5MB each.
+            </p>
+          </div>
+
+          <div className="bg-surface rounded-2xl border border-border p-6">
+            {/* Error banner */}
+            {galleryError && (
+              <div className="mb-4 rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-red-400 text-sm flex items-center justify-between">
+                <span>{galleryError}</span>
+                <button
+                  type="button"
+                  onClick={() => setGalleryError(null)}
+                  className="ml-3 opacity-60 hover:opacity-100 text-lg leading-none"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
+            {/* Loading skeleton */}
+            {galleryLoading ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="aspect-square rounded-xl bg-surface-alt animate-pulse" />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                {/* Existing photos */}
+                {galleryPhotos.map((photo) => (
+                  <div key={photo.id} className="relative group aspect-square rounded-xl overflow-hidden border border-border bg-surface-alt">
+                    <img
+                      src={photo.public_url}
+                      alt="Gallery photo"
+                      className="w-full h-full object-cover"
+                    />
+                    {/* Delete overlay */}
+                    <button
+                      type="button"
+                      onClick={() => handleGalleryDelete(photo)}
+                      disabled={deletingId === photo.id}
+                      className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/50 transition-colors"
+                      aria-label="Delete photo"
+                    >
+                      {deletingId === photo.id ? (
+                        <svg className="w-5 h-5 text-white animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                        </svg>
+                      ) : (
+                        <span className="opacity-0 group-hover:opacity-100 transition-opacity bg-red-500 text-white rounded-full w-8 h-8 flex items-center justify-center text-sm font-bold shadow-lg">
+                          ✕
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                ))}
+
+                {/* Upload tile — shown when under the limit */}
+                {galleryPhotos.length < MAX_GALLERY_PHOTOS && (
+                  <button
+                    type="button"
+                    onClick={() => galleryInputRef.current?.click()}
+                    disabled={galleryUploading}
+                    className="aspect-square rounded-xl border-2 border-dashed border-border hover:border-primary/60 flex flex-col items-center justify-center gap-2 text-text-subtle hover:text-text-muted transition-colors disabled:opacity-50"
+                    style={{ '--tw-border-opacity': '1' } as React.CSSProperties}
+                  >
+                    {galleryUploading ? (
+                      <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                      </svg>
+                    ) : (
+                      <>
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                        </svg>
+                        <span className="text-xs font-medium">Add photo</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Photo count */}
+            {!galleryLoading && (
+              <p className="text-text-subtle text-xs mt-4">
+                {galleryPhotos.length} / {MAX_GALLERY_PHOTOS} photos
+              </p>
+            )}
+          </div>
+
+          {/* Hidden file input for gallery */}
+          <input
+            ref={galleryInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={handleGalleryUpload}
+            className="hidden"
+          />
         </div>
       </div>
     </PortalLayout>
