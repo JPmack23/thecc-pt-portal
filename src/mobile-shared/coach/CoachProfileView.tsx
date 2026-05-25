@@ -279,7 +279,6 @@ function GalleryGrid({
   screenWidth: number;
 }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const TILE = Math.floor((screenWidth - 2) / 3);
 
   return (
     <View style={galleryStyles.wrap}>
@@ -287,13 +286,20 @@ function GalleryGrid({
         Gallery
       </Text>
 
-      {/* 3-column square tile grid */}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 1 }}>
+      {/* 3-column edge-to-edge Instagram-style grid.
+          Using percentage widths (not computed pixel widths) so RNW + React
+          Native both render exactly 3 per row regardless of container quirks.
+          aspectRatio: 1 keeps tiles square at any container size. */}
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
         {photos.map((photo, idx) => (
-          <Pressable key={photo.id} onPress={() => setLightboxIndex(idx)}>
+          <Pressable
+            key={photo.id}
+            onPress={() => setLightboxIndex(idx)}
+            style={{ width: '33.3333%', aspectRatio: 1 }}
+          >
             <Image
               source={{ uri: photo.public_url }}
-              style={{ width: TILE, height: TILE }}
+              style={{ width: '100%', height: '100%' }}
               contentFit="cover"
               transition={200}
             />
