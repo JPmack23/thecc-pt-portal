@@ -6,7 +6,10 @@
  *
  * Rules:
  *   - Max 10 photos
- *   - Photos stored at coach-photos/{coach_id}/{uuid}.{ext} in Supabase storage
+ *   - Photos stored in the public `branding-assets` Supabase bucket at
+ *     path `coach-photos/{coach_id}/{uuid}.{ext}` (the path mimics a folder).
+ *     A dedicated `coach-photos` bucket is a future cleanup — see follow-up
+ *     notes in JP2ndbrain/Daily/2026-05-25.md.
  *   - DB row: coach_photos (coach_id, storage_path, public_url, display_order)
  *   - Delete removes from both storage and DB
  */
@@ -130,7 +133,7 @@ export default function PhotosPage() {
 
       // Upload to storage
       const { error: storageError } = await supabase.storage
-        .from('coach-photos')
+        .from('branding-assets')
         .upload(storagePath, file, { upsert: false, contentType: file.type });
 
       if (storageError) {
@@ -141,7 +144,7 @@ export default function PhotosPage() {
 
       // Get public URL
       const { data: urlData } = supabase.storage
-        .from('coach-photos')
+        .from('branding-assets')
         .getPublicUrl(storagePath);
 
       const publicUrl = urlData.publicUrl;
@@ -156,7 +159,7 @@ export default function PhotosPage() {
 
       if (dbError) {
         // Clean up orphaned storage file
-        await supabase.storage.from('coach-photos').remove([storagePath]);
+        await supabase.storage.from('branding-assets').remove([storagePath]);
         showToast('Failed to save photo record', 'error');
         setUploading(false);
         return;
@@ -177,7 +180,7 @@ export default function PhotosPage() {
 
       // Remove from storage
       const { error: storageError } = await supabase.storage
-        .from('coach-photos')
+        .from('branding-assets')
         .remove([photo.storage_path]);
 
       if (storageError) {
