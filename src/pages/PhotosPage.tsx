@@ -74,6 +74,8 @@ function Toast({
 // ── Main page ──────────────────────────────────────────────────────────────
 
 const MAX_PHOTOS = 10;
+const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB cap on source uploads
+const MAX_FILE_SIZE_LABEL = '5MB';
 const ACCEPTED = 'image/jpeg,image/png,image/webp,image/heic';
 
 export default function PhotosPage() {
@@ -136,6 +138,12 @@ export default function PhotosPage() {
 
       if (photos.length >= MAX_PHOTOS) {
         showToast(`Maximum ${MAX_PHOTOS} photos allowed`, 'error');
+        return;
+      }
+
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+        showToast(`Photo is ${sizeMB}MB — please upload under ${MAX_FILE_SIZE_LABEL}`, 'error');
         return;
       }
 
@@ -335,6 +343,9 @@ export default function PhotosPage() {
                 <p className="text-text-muted text-sm mt-1">
                   Add gallery photos that members see when they view your profile in
                   the app. Up to {MAX_PHOTOS} photos.
+                </p>
+                <p className="text-text-subtle text-xs mt-2">
+                  Recommended: square photos 1200×1200px or larger. JPEG, PNG, WebP, or HEIC. Max {MAX_FILE_SIZE_LABEL} per photo.
                 </p>
               </div>
 
