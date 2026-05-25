@@ -17,6 +17,15 @@
  *   - Gallery crop modal: file pick → crop (1:1, 600×600 JPEG) → upload cropped blob
  *   - Live preview panel wired from existing photos[] + coachRow (no new DB queries)
  *   - Arrow buttons: opacity-40 (was 20), w-8 h-8 (was w-6 h-6) for tap comfort
+ *
+ * Updated v0.4.4 (2026-05-26):
+ *   - Bulk upload path: "Add multiple" button + drag-and-drop
+ *   - autoCropToBlob: pure Canvas API, 600×600 JPEG, centre-crop, no new deps
+ *   - uploadBulk: pre-validate ALL files, cap enforcement, concurrent Promise.allSettled
+ *   - Drag handlers on empty-state div and + slot; isDragging visual feedback
+ *   - Hidden multi-file <input> via multiFileInputRef
+ *   - bulkProgress state drives "Uploading X/Y…" label on the primary button
+ *   - Single-file "Add photo" → crop modal flow completely unchanged
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -78,6 +87,58 @@ const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB cap on source uploads
 const MAX_FILE_SIZE_LABEL = '5MB';
 const ACCEPTED = 'image/jpeg,image/png,image/webp,image/heic';
 
+// Accepted MIME set for format validation (mirrors the ACCEPTED string above)
+const ACCEPTED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic']);
+
+// ── Auto-crop utility (bulk path only — no react-avatar-editor) ───────────
+
+/**
+ * autoCropToBlob
+ *
+ * Takes a File, returns a Promise<Blob> of a 600×600 JPEG (quality 0.92),
+ * centre-cropped to square. Pure browser Canvas API — no new dependencies.
+ *
+ * Falls back from OffscreenCanvas to a regular canvas element for Safari.
+ */
+async function autoCropToBlob(file: File): Promise<Blob> {
+  const objectUrl = URL.createObjectURL(file);
+
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = objectUrl;
+  });
+
+  URL.revokeObjectURL(objectUrl);
+
+  const side = Math.min(img.width, img.height);
+  const sx = (img.width - side) / 2;
+  const sy = (img.height - side) / 2;
+
+  // Use OffscreenCanvas where available (Chrome, Firefox); fall back for Safari
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const canvas = new OffscreenCanvas(600, 600);
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, sx, sy, side, side, 0, 0, 600, 600);
+    return await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
+  } else {
+    // Safari fallback
+    const canvas = document.createElement('canvas');
+    canvas.width = 600;
+    canvas.height = 600;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, sx, sy, side, side, 0, 0, 600, 600);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error('canvas.toBlob returned null'))),
+        'image/jpeg',
+        0.92,
+      );
+    });
+  }
+}
+
 export default function PhotosPage() {
   const { coachRow } = useAuth();
   const { tenant } = useTenant();
@@ -90,13 +151,21 @@ export default function PhotosPage() {
   const [reorderingId, setReorderingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  // Crop modal state
+  // Crop modal state (single-file path — unchanged)
   const [cropFile, setCropFile] = useState<File | null>(null);
   const [cropScale, setCropScale] = useState(1);
   const [cropModalOpen, setCropModalOpen] = useState(false);
   const avatarEditorRef = useRef<AvatarEditorRef>(null);
 
+  // ── v0.4.4 new state & refs ────────────────────────────────────────────
+  const [isDragging, setIsDragging] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const multiFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Drag-leave counter: tracks enter/leave depth to avoid flicker on child elements
+  const dragCounter = useRef(0);
 
   const showToast = useCallback((message: string, type: 'success' | 'error') => {
     setToast({ message, type });
@@ -126,7 +195,8 @@ export default function PhotosPage() {
     loadPhotos();
   }, [loadPhotos]);
 
-  // ── File pick → open crop modal (defers upload until crop save) ────────
+  // ── Single-file path: pick → open crop modal ──────────────────────────
+  // This is completely unchanged from v0.4.3.
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -155,7 +225,7 @@ export default function PhotosPage() {
     [coachRow?.id, photos.length, showToast],
   );
 
-  // ── Crop save → upload 600×600 JPEG blob ──────────────────────────────
+  // ── Crop save → upload 600×600 JPEG blob (single-file path) ──────────
 
   const handleCropSave = useCallback(async () => {
     const editor = avatarEditorRef.current;
@@ -226,6 +296,201 @@ export default function PhotosPage() {
     setCropModalOpen(false);
     setCropFile(null);
   }, []);
+
+  // ── Bulk upload path (v0.4.4) ──────────────────────────────────────────
+
+  /**
+   * uploadBulk
+   *
+   * Handles multi-file upload (drag-and-drop or multi-file picker).
+   * Steps:
+   *  1. Trim to remaining slots (cap enforcement)
+   *  2. Pre-validate ALL files (size + format)
+   *  3. Concurrent autoCrop + upload via Promise.allSettled
+   *  4. Single loadPhotos() call after all settle
+   *  5. One toast summarising results
+   */
+  const uploadBulk = useCallback(
+    async (files: File[]) => {
+      if (!coachRow?.id) return;
+
+      // Guard: prevent concurrent batches (e.g. user drops batch 2 mid-upload of batch 1).
+      // Button disabled state prevents this via clicks, but drag-and-drop bypasses the button.
+      if (uploading) {
+        showToast('Already uploading — please wait for the current batch to finish', 'error');
+        return;
+      }
+
+      // 1. Cap enforcement — take first N in drop order
+      const slots = MAX_PHOTOS - photos.length;
+
+      if (slots === 0) {
+        showToast('Photo limit reached — delete a photo to add more', 'error');
+        return;
+      }
+
+      let chosen = files;
+      if (files.length > slots) {
+        showToast(
+          `Maximum ${MAX_PHOTOS} photos — only first ${slots} of your ${files.length} will be added`,
+          'error',
+        );
+        chosen = files.slice(0, slots);
+      }
+
+      // 2. Pre-validate ALL chosen files before any upload
+      for (const file of chosen) {
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+          const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+          showToast(
+            `"${file.name}" is ${sizeMB}MB — all photos must be under ${MAX_FILE_SIZE_LABEL}. Nothing was uploaded.`,
+            'error',
+          );
+          return;
+        }
+        // HEIC blocked from bulk path: browser Canvas API can't decode HEIC on
+        // Windows/Android, would silently fail with no useful explanation.
+        // PT can still use single-file "Add photo" → crop modal for HEIC.
+        if (file.type === 'image/heic') {
+          showToast(
+            `"${file.name}" is HEIC — bulk upload doesn't support HEIC yet. Please add HEIC photos one at a time using "Add photo", or convert to JPEG first.`,
+            'error',
+          );
+          return;
+        }
+        if (!ACCEPTED_TYPES.has(file.type)) {
+          showToast(
+            `"${file.name}" is not a supported format. Use JPEG, PNG, or WebP for bulk upload. Nothing was uploaded.`,
+            'error',
+          );
+          return;
+        }
+      }
+
+      // 3. Start uploads
+      setBulkProgress({ done: 0, total: chosen.length });
+      setUploading(true);
+
+      // Capture current photos.length for display_order base (closure safe — photos state here)
+      const baseOrder = photos.length;
+
+      const results = await Promise.allSettled(
+        chosen.map(async (file, index) => {
+          try {
+            // Auto centre-crop to 600×600 JPEG
+            const blob = await autoCropToBlob(file);
+
+            const filename = `${crypto.randomUUID()}.jpg`;
+            const storagePath = `coach-photos/${coachRow.id}/${filename}`;
+
+            // Storage upload
+            const { error: storageError } = await supabase.storage
+              .from('branding-assets')
+              .upload(storagePath, blob, { upsert: false, contentType: 'image/jpeg' });
+
+            if (storageError) throw new Error(storageError.message);
+
+            // Get public URL
+            const { data: urlData } = supabase.storage
+              .from('branding-assets')
+              .getPublicUrl(storagePath);
+            const publicUrl = urlData.publicUrl;
+
+            // DB insert
+            const { error: dbError } = await supabase.from('coach_photos').insert({
+              coach_id: coachRow.id,
+              storage_path: storagePath,
+              public_url: publicUrl,
+              display_order: baseOrder + index,
+            });
+
+            if (dbError) {
+              // Clean up orphaned storage file
+              await supabase.storage.from('branding-assets').remove([storagePath]);
+              throw new Error(dbError.message);
+            }
+
+            return { filename: file.name };
+          } finally {
+            // Increment progress counter whether success or failure
+            setBulkProgress((prev) =>
+              prev ? { ...prev, done: prev.done + 1 } : null,
+            );
+          }
+        }),
+      );
+
+      // 4. Tally results
+      const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+      const failed = results.length - succeeded;
+
+      // 5. Single reload
+      setBulkProgress(null);
+      setUploading(false);
+      await loadPhotos();
+
+      // 6. Surface result
+      if (failed === 0) {
+        showToast(
+          `${succeeded} photo${succeeded === 1 ? '' : 's'} added`,
+          'success',
+        );
+      } else if (succeeded === 0) {
+        showToast('All photos failed to upload — try again', 'error');
+      } else {
+        showToast(
+          `${succeeded} photo${succeeded === 1 ? '' : 's'} added, ${failed} failed`,
+          'error',
+        );
+      }
+    },
+    [coachRow?.id, photos.length, uploading, showToast, loadPhotos],
+  );
+
+  // ── Drag handlers ──────────────────────────────────────────────────────
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current += 1;
+    setIsDragging(true);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current -= 1;
+    if (dragCounter.current === 0) {
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      dragCounter.current = 0;
+      setIsDragging(false);
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length > 0) {
+        uploadBulk(files);
+      }
+    },
+    [uploadBulk],
+  );
+
+  // ── Multi-file picker onChange ─────────────────────────────────────────
+
+  const handleMultiFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files?.length) {
+        uploadBulk(Array.from(e.target.files));
+        e.target.value = '';
+      }
+    },
+    [uploadBulk],
+  );
 
   // ── Delete ─────────────────────────────────────────────────────────────
 
@@ -316,9 +581,16 @@ export default function PhotosPage() {
 
   const canAddMore = photos.length < MAX_PHOTOS;
 
+  // Three-state label for the primary "Add photo" button
+  const addPhotoLabel = bulkProgress
+    ? `Uploading ${bulkProgress.done}/${bulkProgress.total}…`
+    : uploading
+      ? 'Uploading…'
+      : null; // null → render the default "+ Add photo" markup below
+
   return (
     <PortalLayout>
-      {/* Gallery crop modal */}
+      {/* Gallery crop modal (single-file path — unchanged) */}
       {cropModalOpen && cropFile && (
         <GalleryPhotoCropModal
           file={cropFile}
@@ -330,6 +602,16 @@ export default function PhotosPage() {
           primary={primary}
         />
       )}
+
+      {/* Hidden multi-file input (bulk path) */}
+      <input
+        ref={multiFileInputRef}
+        type="file"
+        accept={ACCEPTED}
+        multiple
+        className="hidden"
+        onChange={handleMultiFileChange}
+      />
 
       {/* Split-panel layout: max-w-6xl, left = grid + upload, right = preview */}
       <div className="max-w-6xl mx-auto px-6 py-10">
@@ -345,30 +627,46 @@ export default function PhotosPage() {
                   the app. Up to {MAX_PHOTOS} photos.
                 </p>
                 <p className="text-text-subtle text-xs mt-2">
-                  Recommended: square photos 1200×1200px or larger. JPEG, PNG, WebP, or HEIC. Max {MAX_FILE_SIZE_LABEL} per photo.
+                  Recommended: square photos 1200×1200px or larger. JPEG, PNG, WebP, or HEIC. Max{' '}
+                  {MAX_FILE_SIZE_LABEL} per photo. Multi-upload photos are center-cropped to square
+                  automatically.
                 </p>
               </div>
 
-              {/* Upload button */}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading || !canAddMore}
-                className="flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{ backgroundColor: primary, color: '#000' }}
-              >
-                {uploading ? (
-                  <>
-                    <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
-                    Uploading…
-                  </>
-                ) : (
-                  <>
-                    <span className="text-lg leading-none">+</span>
-                    Add photo
-                  </>
-                )}
-              </button>
+              {/* Button row: "Add photo" (single, crop modal) + "Add multiple" (bulk) */}
+              <div className="flex-shrink-0 flex items-center gap-2">
+                {/* Primary: Add photo — single-file, crop modal */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading || !canAddMore}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{ backgroundColor: primary, color: '#000' }}
+                >
+                  {addPhotoLabel ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                      {addPhotoLabel}
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-lg leading-none">+</span>
+                      Add photo
+                    </>
+                  )}
+                </button>
 
+                {/* Secondary: Add multiple — bulk path */}
+                <button
+                  onClick={() => multiFileInputRef.current?.click()}
+                  disabled={uploading || !canAddMore}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border border-border text-text-muted hover:text-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <span className="text-lg leading-none">+</span>
+                  Add multiple
+                </button>
+              </div>
+
+              {/* Hidden single-file input (single path — unchanged) */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -392,24 +690,56 @@ export default function PhotosPage() {
                 />
               </div>
             ) : photos.length === 0 ? (
-              <div className="border border-dashed border-border rounded-2xl flex flex-col items-center justify-center h-48 gap-3 text-center px-6">
-                <div
-                  className="w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold"
-                  style={{ backgroundColor: primary + '20', color: primary }}
-                >
-                  📷
-                </div>
-                <p className="text-text-muted text-sm">
-                  No photos yet. Click{' '}
-                  <button
-                    className="underline font-medium"
-                    style={{ color: primary }}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    Add photo
-                  </button>{' '}
-                  to get started.
-                </p>
+              /* Empty state — also serves as the dropzone */
+              <div
+                className="border-2 border-dashed rounded-2xl flex flex-col items-center justify-center h-48 gap-3 text-center px-6 transition-all"
+                style={{
+                  borderColor: isDragging ? primary : undefined,
+                  backgroundColor: isDragging ? primary + '10' : undefined,
+                }}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                {isDragging ? (
+                  <p className="text-sm font-semibold" style={{ color: primary }}>
+                    Drop photos to upload
+                  </p>
+                ) : (
+                  <>
+                    <div
+                      className="w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold"
+                      style={{ backgroundColor: primary + '20', color: primary }}
+                    >
+                      📷
+                    </div>
+                    <p className="text-text-muted text-sm">
+                      No photos yet. Click{' '}
+                      <button
+                        className="underline font-medium"
+                        style={{ color: primary }}
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        Add photo
+                      </button>{' '}
+                      (single, with crop) or{' '}
+                      <button
+                        className="underline font-medium"
+                        style={{ color: primary }}
+                        onClick={() => multiFileInputRef.current?.click()}
+                      >
+                        Add multiple
+                      </button>{' '}
+                      (bulk, auto-cropped). Or drop photos here.
+                      <br />
+                      <span className="text-text-subtle text-xs">
+                        Square photos work best — non-square images will be centre-cropped to a 1:1
+                        square.
+                      </span>
+                    </p>
+                  </>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
@@ -468,21 +798,36 @@ export default function PhotosPage() {
                   </div>
                 ))}
 
-                {/* Add more slot — shown when under limit */}
+                {/* + Add slot — shown when under limit; also serves as dropzone */}
                 {canAddMore && (
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploading}
-                    className="aspect-square rounded-2xl border border-dashed border-border flex flex-col items-center justify-center gap-2 transition-colors hover:border-primary disabled:opacity-40"
-                    style={{ '--tw-border-opacity': 1 } as React.CSSProperties}
+                    className="aspect-square rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-all disabled:opacity-40"
+                    style={{
+                      borderColor: isDragging ? primary : undefined,
+                      backgroundColor: isDragging ? primary + '10' : undefined,
+                    }}
+                    onDragEnter={handleDragEnter}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
                   >
-                    <span
-                      className="text-3xl font-bold"
-                      style={{ color: primary }}
-                    >
-                      +
-                    </span>
-                    <span className="text-text-muted text-xs">Add photo</span>
+                    {isDragging ? (
+                      <span className="text-sm font-semibold" style={{ color: primary }}>
+                        Drop photos to upload
+                      </span>
+                    ) : (
+                      <>
+                        <span
+                          className="text-3xl font-bold"
+                          style={{ color: primary }}
+                        >
+                          +
+                        </span>
+                        <span className="text-text-muted text-xs">Add photo</span>
+                      </>
+                    )}
                   </button>
                 )}
               </div>
