@@ -39,6 +39,14 @@ const SUPABASE_FUNCTIONS_URL =
   import.meta.env.VITE_SUPABASE_FUNCTIONS_URL ??
   'https://pzqwvblyuxezfgjxnbbn.supabase.co/functions/v1';
 
+// The api-v1-tenant-config function is deployed with verify_jwt = true, so the
+// Supabase API gateway rejects header-less requests with 401 before the function
+// runs. This is the FIRST call the portal makes — before any user is signed in —
+// so we send the public anon key explicitly. The anon key already ships in the
+// client bundle (it's public by design), so this leaks nothing; it just makes the
+// bootstrap call deterministic instead of relying on undefined gateway behaviour.
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
+
 function resolveHostname(): string {
   // 1. Query param override (Vercel preview testing)
   const params = new URLSearchParams(window.location.search);
@@ -110,7 +118,13 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
 
     fetch(url.toString(), {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        // Required because the function is deployed with verify_jwt = true.
+        // Public anon key — safe to send pre-auth (it ships in the bundle).
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
     })
       .then(async (res) => {
         if (res.status === 404) {

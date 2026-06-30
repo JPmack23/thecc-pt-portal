@@ -6,10 +6,12 @@
  *
  * Rules:
  *   - Max 10 photos
- *   - Photos stored in the public `branding-assets` Supabase bucket at
- *     path `coach-photos/{coach_id}/{uuid}.{ext}` (the path mimics a folder).
- *     A dedicated `coach-photos` bucket is a future cleanup — see follow-up
- *     notes in JP2ndbrain/Daily/2026-05-25.md.
+ *   - NEW photos are stored in the dedicated public `coach-photos` Supabase
+ *     bucket at path `{coach_id}/{uuid}.jpg`, with coach-scoped folder-owner RLS
+ *     (migration 20260630120500_coach_photos_storage_bucket.sql).
+ *   - LEGACY photos remain in the public `branding-assets` bucket at
+ *     `coach-photos/{coach_id}/{uuid}.jpg`; their public_url keeps resolving and
+ *     deletes route to the right bucket via bucketForStoragePath().
  *   - DB row: coach_photos (coach_id, storage_path, public_url, display_order)
  *   - Delete removes from both storage and DB
  *
@@ -116,6 +118,22 @@ const MAX_PHOTOS = 10;
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB cap on source uploads
 const MAX_FILE_SIZE_LABEL = '5MB';
 const ACCEPTED = 'image/jpeg,image/png,image/webp,image/heic';
+
+// Dedicated gallery bucket. NEW uploads land here at path `{coach_id}/{uuid}.jpg`
+// with coach-scoped folder-owner RLS (migration 20260630120500). Existing photos
+// remain in the public `branding-assets` bucket and their public_url keeps working.
+const COACH_PHOTOS_BUCKET = 'coach-photos';
+const LEGACY_BUCKET = 'branding-assets';
+
+/**
+ * Pick the storage bucket for an EXISTING row from its stored path.
+ * Legacy rows use a `coach-photos/{coach_id}/...` prefix inside `branding-assets`.
+ * New rows use `{coach_id}/{uuid}.jpg` inside the dedicated `coach-photos` bucket.
+ * This keeps deletes of old photos working without a schema change.
+ */
+function bucketForStoragePath(storagePath: string): string {
+  return storagePath.startsWith('coach-photos/') ? LEGACY_BUCKET : COACH_PHOTOS_BUCKET;
+}
 
 // Accepted MIME set for format validation (mirrors the ACCEPTED string above)
 const ACCEPTED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic']);
@@ -399,11 +417,11 @@ export default function PhotosPage() {
     setUploading(true);
 
     const filename = `${crypto.randomUUID()}.jpg`;
-    const storagePath = `coach-photos/${coachRow.id}/${filename}`;
+    const storagePath = `${coachRow.id}/${filename}`;
     const croppedFile = new File([blob], filename, { type: 'image/jpeg' });
 
     const { error: storageError } = await supabase.storage
-      .from('branding-assets')
+      .from(COACH_PHOTOS_BUCKET)
       .upload(storagePath, croppedFile, { upsert: false, contentType: 'image/jpeg' });
 
     if (storageError) {
@@ -413,7 +431,7 @@ export default function PhotosPage() {
     }
 
     const { data: urlData } = supabase.storage
-      .from('branding-assets')
+      .from(COACH_PHOTOS_BUCKET)
       .getPublicUrl(storagePath);
 
     const publicUrl = urlData.publicUrl;
@@ -427,7 +445,7 @@ export default function PhotosPage() {
 
     if (dbError) {
       // Clean up orphaned storage file
-      await supabase.storage.from('branding-assets').remove([storagePath]);
+      await supabase.storage.from(COACH_PHOTOS_BUCKET).remove([storagePath]);
       showToast('Failed to save photo record', 'error');
       setUploading(false);
       return;
@@ -527,18 +545,18 @@ export default function PhotosPage() {
             const blob = await autoCropToBlob(file);
 
             const filename = `${crypto.randomUUID()}.jpg`;
-            const storagePath = `coach-photos/${coachRow.id}/${filename}`;
+            const storagePath = `${coachRow.id}/${filename}`;
 
             // Storage upload
             const { error: storageError } = await supabase.storage
-              .from('branding-assets')
+              .from(COACH_PHOTOS_BUCKET)
               .upload(storagePath, blob, { upsert: false, contentType: 'image/jpeg' });
 
             if (storageError) throw new Error(storageError.message);
 
             // Get public URL
             const { data: urlData } = supabase.storage
-              .from('branding-assets')
+              .from(COACH_PHOTOS_BUCKET)
               .getPublicUrl(storagePath);
             const publicUrl = urlData.publicUrl;
 
@@ -552,7 +570,7 @@ export default function PhotosPage() {
 
             if (dbError) {
               // Clean up orphaned storage file
-              await supabase.storage.from('branding-assets').remove([storagePath]);
+              await supabase.storage.from(COACH_PHOTOS_BUCKET).remove([storagePath]);
               throw new Error(dbError.message);
             }
 
@@ -644,9 +662,10 @@ export default function PhotosPage() {
     async (photo: CoachPhoto) => {
       setDeletingId(photo.id);
 
-      // Remove from storage
+      // Remove from storage — pick the bucket the file actually lives in
+      // (legacy rows: branding-assets; new rows: coach-photos).
       const { error: storageError } = await supabase.storage
-        .from('branding-assets')
+        .from(bucketForStoragePath(photo.storage_path))
         .remove([photo.storage_path]);
 
       if (storageError) {
